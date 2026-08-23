@@ -1,0 +1,26 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  little.tools — hosted zone only. Deployed first, on its own, so the nameservers
+  can be pointed at Route 53 before anything asks for a certificate: DNS
+  validation cannot succeed until the delegation is live, and a stack that waits
+  for it sits there for hours.
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: little.tools
+
+Resources:
+  Zone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref DomainName
+
+Outputs:
+  HostedZoneId:
+    Value: !Ref Zone
+    Export:
+      Name: !Sub "${AWS::StackName}-zone-id"
+  NameServers:
+    Description: Set these as the nameservers for the domain at the registrar.
+    Value: !Join [" ", !GetAtt Zone.NameServers]
