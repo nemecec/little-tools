@@ -13,10 +13,6 @@ Parameters:
   HostedZoneId:
     Type: String
     Description: From the dns stack's output.
-  PathPrefix:
-    Type: String
-    Default: tera-timetable
-    Description: Path the timetable is served at, without slashes.
   GitHubRepo:
     Type: String
     Default: nemecec/little-tools
@@ -100,8 +96,8 @@ Resources:
         SigningBehavior: always
         SigningProtocol: sigv4
 
-  # A REST origin serves exactly the key it is asked for, so /tera-timetable and
-  # /tera-timetable/ have to be turned into the index object here.
+  # A REST origin serves exactly the key it is asked for, so /timetable and
+  # /timetable/ have to be turned into the index object here.
   IndexRewrite:
     Type: AWS::CloudFront::Function
     Properties:
@@ -249,4 +245,4 @@ Outputs:
   PublishRoleArn:
     Value: !GetAtt PublishRole.Arn
   SiteUrl:
-    Value: !Sub "https://${DomainName}/${PathPrefix}/"
+    Value: !Sub "https://${DomainName}/"

@@ -4,7 +4,9 @@ Run by the repository's publish workflow, and usable by hand for the first
 upload or a one-off. Talks to AWS through the CLI, so it needs nothing installed
 beyond what `tt.py` already needs: nothing.
 
-    BUCKET=... DISTRIBUTION=... PREFIX=tera-timetable python3 deploy/publish.py
+    BUCKET=... DISTRIBUTION=... python3 deploy/publish.py
+
+The address it publishes to comes from site.conf; the environment overrides it.
 """
 
 import datetime
@@ -19,9 +21,24 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import tt
 
+HERE = pathlib.Path(__file__).resolve().parent
+
+
+def configured(name, fallback=""):
+    """From the environment, else from site.conf, which is the one place the
+    site's address is written down."""
+    if os.environ.get(name):
+        return os.environ[name]
+    for line in (HERE / "site.conf").read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith(f"{name}=") and not line.startswith("#"):
+            return line.split("=", 1)[1].strip()
+    return fallback
+
+
 BUCKET = os.environ["BUCKET"]
 DISTRIBUTION = os.environ["DISTRIBUTION"]
-PREFIX = os.environ.get("PREFIX", "").strip("/")
+PREFIX = configured("PREFIX").strip("/")
 GOATCOUNTER = os.environ.get("GOATCOUNTER", "")
 EDUPAGE = os.environ.get("EDUPAGE", "tera")
 YEAR = int(os.environ.get("YEAR", "2026"))
@@ -74,7 +91,6 @@ def upload(path, key):
 def main():
     body, schools, slots = build()
     key = f"{PREFIX}/index.html" if PREFIX else "index.html"
-    here = pathlib.Path(__file__).resolve().parent
 
     current = published(key)
     if current is not None and same(current, body):
@@ -85,8 +101,14 @@ def main():
         page = pathlib.Path(tmp, "index.html")
         page.write_bytes(body)
         upload(str(page), key)
-    for name in ("index.html", "404.html"):
-        upload(str(here / name), name)
+        # The root page links to whatever the prefix says, rather than keeping
+        # its own copy of it to fall out of step with.
+        for name in ("index.html", "404.html"):
+            local = pathlib.Path(tmp, "root-" + name)
+            local.write_text(
+                (HERE / name).read_text(encoding="utf-8").replace("__PREFIX__", PREFIX),
+                encoding="utf-8")
+            upload(str(local), name)
 
     aws("cloudfront", "create-invalidation", "--distribution-id", DISTRIBUTION,
         "--paths", "/*")

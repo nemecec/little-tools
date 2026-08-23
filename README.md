@@ -1,6 +1,6 @@
 # Hosting little.tools
 
-The timetable at `https://little.tools/tera-timetable/`, rebuilt nightly from the
+The timetable at `https://little.tools/timetable/`, rebuilt nightly from the
 school's public data.
 
     GitHub Actions (nightly)
@@ -28,6 +28,40 @@ write to this bucket and invalidate this distribution.
 
 The workflow itself is `.github/workflows/publish.yml`.
 
+## Where the address is configured
+
+`deploy/site.conf`, and only there:
+
+    DOMAIN=little.tools
+    PREFIX=timetable        →  https://little.tools/timetable/
+
+CloudFormation takes the domain from it, `publish.py` builds the S3 key from the
+prefix, and the root page's link is substituted at publish time — so moving the
+page means editing one line. Setting a `SITE_PREFIX` repository variable
+overrides the prefix without a commit; everything downstream follows whichever
+value won.
+
+## Credentials
+
+The deploy needs an AWS profile with room to create CloudFormation stacks, S3
+buckets, a CloudFront distribution, a certificate, Route 53 records and an IAM
+role. Nothing here is ongoing: once it is up, publishing authenticates with a
+short-lived OIDC token and no key exists anywhere.
+
+Mirror the SSO profile pattern already in `~/.aws/config` rather than putting a
+long-lived key on disk:
+
+1. In the console, open **IAM Identity Center**, enable it if it is not, and give
+   yourself a user with **AdministratorAccess** on the account.
+2. `aws configure sso --profile little-tools` — paste the portal's start URL when
+   asked. Any default region will do; the scripts pin their own.
+3. `aws sso login --profile little-tools`, then `export AWS_PROFILE=little-tools`
+   in the shell you deploy from.
+
+An IAM user with an access key works too and is quicker, but it leaves a
+long-lived secret on the machine for something used a handful of times. Either
+way, not the root user.
+
 ## First deploy
 
 Everything goes in **us-east-1** — a CloudFront certificate has to be issued
@@ -40,6 +74,7 @@ embedded at all, and the footer says nothing about counting.
 
 **2. The hosted zone, and the delegation.**
 
+    export AWS_PROFILE=little-tools
     ./deploy.sh dns
 
 It prints four nameservers. Set them for `little.tools` at Gandi, replacing the

@@ -13,13 +13,20 @@
 
 set -euo pipefail
 
-DOMAIN="${DOMAIN:-little.tools}"
-PREFIX="${PREFIX:-tera-timetable}"
+here="$(cd "$(dirname "$0")" && pwd)"
+
+# site.conf is the one place the address is written down; the environment wins
+# over it, for trying something out without editing the file.
+from_env_domain="${DOMAIN:-}" from_env_prefix="${PREFIX:-}"
+# shellcheck source=site.conf
+. "$here/site.conf"
+DOMAIN="${from_env_domain:-$DOMAIN}"
+PREFIX="${from_env_prefix:-$PREFIX}"
+
 REPO="${REPO:-nemecec/little-tools}"
 REGION="us-east-1"
 DNS_STACK="${DOMAIN//./-}-dns"
 SITE_STACK="${DOMAIN//./-}-site"
-here="$(cd "$(dirname "$0")" && pwd)"
 
 aws() { command aws --region "$REGION" "$@"; }
 
@@ -62,7 +69,7 @@ site)
     --template-file "$here/site.yaml" \
     --capabilities CAPABILITY_NAMED_IAM \
     --parameter-overrides \
-      "DomainName=$DOMAIN" "HostedZoneId=$zone" "PathPrefix=$PREFIX" \
+      "DomainName=$DOMAIN" "HostedZoneId=$zone" \
       "GitHubRepo=$REPO" "CreateOidcProvider=$oidc"
   echo
   echo "Live at $(output "$SITE_STACK" SiteUrl) once something has been published."
