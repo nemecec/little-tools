@@ -195,6 +195,12 @@ Resources:
     Properties:
       Url: https://token.actions.githubusercontent.com
       ClientIdList: [sts.amazonaws.com]
+      # Left to itself CloudFormation fills in a thumbprint of its own choosing,
+      # and a token signed under a different chain is then rejected with nothing
+      # more helpful than "could not be validated". These are GitHub's.
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
 
   PublishRole:
     Type: AWS::IAM::Role
