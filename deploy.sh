@@ -69,6 +69,14 @@ site)
   ;;
 
 secrets)
+  # gh keeps several accounts and only one is active; the wrong one gets a 403
+  # here that reads like a permissions bug rather than a wrong-hat bug.
+  if ! gh api "repos/$REPO" --jq .permissions.push 2>/dev/null | grep -q true; then
+    echo "the active gh account cannot write to $REPO." >&2
+    echo "  gh auth status          # see which accounts are logged in" >&2
+    echo "  gh auth switch --user <account>" >&2
+    exit 1
+  fi
   gh secret set AWS_PUBLISH_ROLE --repo "$REPO" --body "$(output "$SITE_STACK" PublishRoleArn)"
   gh secret set AWS_BUCKET       --repo "$REPO" --body "$(output "$SITE_STACK" BucketName)"
   gh secret set AWS_DISTRIBUTION --repo "$REPO" --body "$(output "$SITE_STACK" DistributionId)"
