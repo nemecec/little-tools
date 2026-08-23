@@ -1,0 +1,32 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  The TLS certificate, and nothing else. CloudFront reads certificates only from
+  us-east-1, wherever the rest of the site lives, so this one stack is deployed
+  there and hands its ARN to the site stack. Validation is over DNS, so the
+  hosted zone must already be answering for the domain before this will finish.
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: little.tools
+  HostedZoneId:
+    Type: String
+    Description: From the dns stack's output.
+
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      SubjectAlternativeNames:
+        - !Sub "www.${DomainName}"
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub "www.${DomainName}"
+          HostedZoneId: !Ref HostedZoneId
+
+Outputs:
+  CertificateArn:
+    Value: !Ref Certificate

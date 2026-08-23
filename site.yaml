@@ -4,7 +4,11 @@ Description: >
   Actions can assume to publish into it. Nothing sits in the request path:
   readers are served a static object from an edge cache, so a failed build
   leaves the last good page in place. The build itself lives in the repository,
-  not here. Deploy in us-east-1; a CloudFront certificate has to live there.
+  not here.
+
+  Deploy this wherever the bucket should live — everything else in it is global.
+  The certificate is the one piece that has to be in us-east-1, and it is its own
+  stack for exactly that reason.
 
 Parameters:
   DomainName:
@@ -13,6 +17,9 @@ Parameters:
   HostedZoneId:
     Type: String
     Description: From the dns stack's output.
+  CertificateArn:
+    Type: String
+    Description: From the cert stack's output. Must be a certificate in us-east-1.
   GitHubRepo:
     Type: String
     Default: nemecec/little-tools
@@ -74,19 +81,6 @@ Resources:
                 AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
 
   # ------------------------------------------------------------- delivery ----
-  Certificate:
-    Type: AWS::CertificateManager::Certificate
-    Properties:
-      DomainName: !Ref DomainName
-      SubjectAlternativeNames:
-        - !Sub "www.${DomainName}"
-      ValidationMethod: DNS
-      DomainValidationOptions:
-        - DomainName: !Ref DomainName
-          HostedZoneId: !Ref HostedZoneId
-        - DomainName: !Sub "www.${DomainName}"
-          HostedZoneId: !Ref HostedZoneId
-
   OriginAccessControl:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
@@ -158,7 +152,7 @@ Resources:
             ResponsePagePath: /404.html
             ErrorCachingMinTTL: 60
         ViewerCertificate:
-          AcmCertificateArn: !Ref Certificate
+          AcmCertificateArn: !Ref CertificateArn
           SslSupportMethod: sni-only
           MinimumProtocolVersion: TLSv1.2_2021
 

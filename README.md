@@ -20,8 +20,10 @@ write to this bucket and invalidate this distribution.
 
 | file | |
 | --- | --- |
+| `site.conf` | the domain, the path and the region — read by everything else |
 | `dns.yaml` | the Route 53 hosted zone, on its own |
-| `site.yaml` | bucket, CloudFront, certificate, the role Actions assumes |
+| `cert.yaml` | the TLS certificate, in us-east-1 because it must be |
+| `site.yaml` | bucket, CloudFront, the role Actions assumes |
 | `publish.py` | build and publish; run by the workflow, and by hand |
 | `index.html`, `404.html` | the site root |
 | `deploy.sh` | the commands below |
@@ -34,6 +36,7 @@ The workflow itself is `.github/workflows/publish.yml`.
 
     DOMAIN=little.tools
     PREFIX=timetable        →  https://little.tools/timetable/
+    REGION=eu-central-1     →  where the bucket lives
 
 CloudFormation takes the domain from it, `publish.py` builds the S3 key from the
 prefix, and the root page's link is substituted at publish time — so moving the
@@ -62,10 +65,22 @@ An IAM user with an access key works too and is quicker, but it leaves a
 long-lived secret on the machine for something used a handful of times. Either
 way, not the root user.
 
-## First deploy
+## Regions
 
-Everything goes in **us-east-1** — a CloudFront certificate has to be issued
-there.
+Of the ten resources here, one is pinned and one is a choice.
+
+**The certificate must be in us-east-1.** CloudFront reads certificates from
+nowhere else, whatever region the rest of the site is in. That is why it is its
+own stack.
+
+**The bucket is the choice**, and it is in **eu-central-1**: the data is a
+European school's, and there is no reason to park a copy in Virginia. The cost
+is nothing — CloudFront pays no egress to fetch from its origin, and with a
+five-minute cache in front of one small object, a reader never waits on it.
+
+Everything else — CloudFront, Route 53, IAM — is global. The region those stacks
+are deployed in only decides where the bookkeeping lives, so they sit with the
+bucket.
 
 **1. Count visits (optional).** Register a site at
 [goatcounter.com](https://www.goatcounter.com/) and note the code; the page will
@@ -89,9 +104,10 @@ succeed until you finish the registrar side.
 
     ./deploy.sh site
 
-Certificate, bucket, distribution and the publish role. Ten to twenty minutes,
-most of it CloudFront. It works out on its own whether the account already has a
-GitHub OIDC provider — there can only be one — and reuses it if so.
+The certificate in us-east-1, then bucket, distribution and publish role in
+`REGION`. Ten to twenty minutes, most of it CloudFront. It works out on its own
+whether the account already has a GitHub OIDC provider — there can only be one —
+and reuses it if so.
 
 **4. Hand the outputs to the repository.**
 
@@ -150,7 +166,8 @@ you publish is still worth the five minutes.
 
 ## Taking it down
 
-    aws --region us-east-1 cloudformation delete-stack --stack-name little-tools-site
+    aws --region eu-central-1 cloudformation delete-stack --stack-name little-tools-site
+    aws --region us-east-1    cloudformation delete-stack --stack-name little-tools-cert
 
 The bucket is versioned, so empty it first if CloudFormation refuses. Deleting
 the site stack also removes the publish role, which is the whole of what the

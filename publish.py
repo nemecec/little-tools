@@ -45,14 +45,15 @@ YEAR = int(os.environ.get("YEAR", "2026"))
 INITIAL_SCHOOL = os.environ.get("INITIAL_SCHOOL", "")
 INITIAL_CLASS = os.environ.get("INITIAL_CLASS", "")
 LANGUAGE = os.environ.get("SITE_LANGUAGE", "en")
-REGION = os.environ.get("AWS_REGION", "us-east-1")
+REGION = os.environ.get("AWS_REGION") or configured("REGION", "eu-central-1")
+CLOUDFRONT_REGION = "us-east-1"   # global service; the CLI wants a region anyway
 
 HTML = "text/html; charset=utf-8"
 CACHE = "public, max-age=300"
 
 
-def aws(*args, **kw):
-    return subprocess.run(["aws", "--region", REGION, *args],
+def aws(*args, region=REGION, **kw):
+    return subprocess.run(["aws", "--region", region, *args],
                           check=True, capture_output=True, **kw)
 
 
@@ -111,7 +112,7 @@ def main():
             upload(str(local), name)
 
     aws("cloudfront", "create-invalidation", "--distribution-id", DISTRIBUTION,
-        "--paths", "/*")
+        "--paths", "/*", region=CLOUDFRONT_REGION)
     print(f"published {key}: {schools} schools, {slots} lesson slots, {len(body)} bytes")
     return 0
 
