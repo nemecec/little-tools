@@ -69,14 +69,24 @@ site)
     --parameter-overrides "DomainName=$DOMAIN" "HostedZoneId=$zone"
   cert="$(output "$CERT_STACK" CertificateArn "$CERT_REGION")"
 
-  # An account holds one GitHub OIDC provider; reuse it if something else made it.
-  if aws iam list-open-id-connect-providers \
-       --query "OpenIDConnectProviderList[?contains(Arn,'token.actions.githubusercontent.com')]" \
-       --output text | grep -q .; then
-    oidc=no
-    echo "reusing the GitHub OIDC provider already in this account"
-  else
-    oidc=yes
+  # An account holds one GitHub OIDC provider. Whether this stack owns it is
+  # decided once, on the first deploy, and then kept: asking the question again
+  # later would find the stack's own provider, answer "no", and make the next
+  # update delete the very thing it was asked about.
+  # OIDC=yes|no overrides, for putting it right if it was ever answered wrongly.
+  oidc="${OIDC:-}"
+  [ -n "$oidc" ] || oidc="$(aws cloudformation describe-stacks --stack-name "$SITE_STACK" \
+    --query "Stacks[0].Parameters[?ParameterKey=='CreateOidcProvider'].ParameterValue" \
+    --output text 2>/dev/null || true)"
+  if [ -z "$oidc" ] || [ "$oidc" = "None" ]; then
+    if aws iam list-open-id-connect-providers \
+         --query "OpenIDConnectProviderList[?contains(Arn,'token.actions.githubusercontent.com')]" \
+         --output text | grep -q .; then
+      oidc=no
+      echo "reusing the GitHub OIDC provider already in this account"
+    else
+      oidc=yes
+    fi
   fi
 
   aws cloudformation deploy --stack-name "$SITE_STACK" \

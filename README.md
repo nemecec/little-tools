@@ -160,6 +160,10 @@ OIDC role:
 - Omit `ThumbprintList` and CloudFormation fills in one of its own. A token
   signed under a different chain is then refused with nothing more useful than
   *the web identity token provided could not be validated*.
+- Whether this stack owns the account's OIDC provider is decided on the first
+  deploy and then kept. Asking again later finds the stack's own provider,
+  answers "no", and the next update deletes the thing it was asked about. If the
+  answer ever needs correcting: `OIDC=yes ./deploy.sh site`.
 
 ## Cost
 
