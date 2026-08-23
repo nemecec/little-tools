@@ -70,10 +70,20 @@ tab, or do it from here without waiting for CI:
 
 ## Afterwards
 
-A push to `main` that touches `tt.py` or `deploy/` publishes. So does the nightly
-schedule, and the *Run workflow* button. Where the page opens, which language it
-starts in and the path it is served at are environment values in
-`.github/workflows/publish.yml`; the rest is `site.yaml`.
+Publishing happens on the nightly schedule and when you press *Run workflow* —
+never on a push. The school's server rations how often one address may ask for
+everything, and it starts timing out a caller that has just done so several
+times over; a day of ordinary commits could spend that ration before the nightly
+run gets its turn. After changing the generator, publish deliberately: the
+button, or `./deploy.sh publish` from a machine that has not been hammering the
+API. For the same reason the determinism check in `check.yml` only fetches when
+run by hand.
+
+Where the page opens, which language it starts in and the path it is served at
+are environment values in `.github/workflows/publish.yml`; the rest is
+`site.yaml`. A fetch that stalls is retried three times, waiting 5, 20 and 60
+seconds, which is enough to ride out the throttling seen in practice. If it
+still fails, nothing is published and yesterday's page keeps serving.
 
 **Scheduled workflows stop after 60 days without repository activity.** GitHub
 warns the owner by email first. A term-time timetable changes often enough that
