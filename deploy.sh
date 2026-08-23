@@ -116,12 +116,18 @@ code)
   aws lambda update-function-code --function-name "$fn" \
     --zip-file "fileb://$work/bundle.zip" --output text --query LastModified
   aws lambda wait function-updated --function-name "$fn"
+  # The shorthand parser rejects an empty value, so only what has one goes in.
+  # YEAR normally has none: unset, the generator follows the calendar.
+  vars="BUCKET=$(output "$SITE_STACK" BucketName)"
+  vars="$vars,DISTRIBUTION=$(output "$SITE_STACK" DistributionId)"
+  vars="$vars,INITIAL_SCHOOL=${INITIAL_SCHOOL:-ProTERA}"
+  vars="$vars,INITIAL_CLASS=${INITIAL_CLASS:-8}"
+  vars="$vars,SITE_LANGUAGE=${SITE_LANGUAGE:-et}"
+  vars="$vars,PREFIX=$PREFIX"
+  [ -n "${GOATCOUNTER:-}" ] && vars="$vars,GOATCOUNTER=$GOATCOUNTER"
+  [ -n "${YEAR:-}" ] && vars="$vars,YEAR=$YEAR"
   aws lambda update-function-configuration --function-name "$fn" \
-    --environment "Variables={BUCKET=$(output "$SITE_STACK" BucketName),\
-DISTRIBUTION=$(output "$SITE_STACK" DistributionId),\
-GOATCOUNTER=${GOATCOUNTER:-},INITIAL_SCHOOL=${INITIAL_SCHOOL:-ProTERA},\
-INITIAL_CLASS=${INITIAL_CLASS:-8},SITE_LANGUAGE=${SITE_LANGUAGE:-et},\
-PREFIX=$PREFIX,YEAR=${YEAR:-}}" \
+    --environment "Variables={$vars}" \
     --output text --query LastModified
   echo "pushed the generator to $fn"
   ;;
