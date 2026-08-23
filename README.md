@@ -46,9 +46,8 @@ The workflow itself is `.github/workflows/publish.yml`.
 
 CloudFormation takes the domain from it, `publish.py` builds the S3 key from the
 prefix, and the root page's link is substituted at publish time — so moving the
-page means editing one line. Setting a `SITE_PREFIX` repository variable
-overrides the prefix without a commit; everything downstream follows whichever
-value won.
+page means editing one line. An environment variable of the same name overrides
+any of them for one command, which is how `OIDC=yes ./deploy.sh site` works.
 
 ## Credentials
 
@@ -77,7 +76,8 @@ way, not the root user.
 
 ## Regions
 
-Of the ten resources here, one is pinned and one is a choice.
+Fifteen resources across the three templates. One is pinned to a region and one
+is a choice; the rest are global or follow the bucket.
 
 **The certificate must be in us-east-1.** CloudFront reads certificates from
 nowhere else, whatever region the rest of the site is in. That is why it is its
@@ -91,6 +91,8 @@ five-minute cache in front of one small object, a reader never waits on it.
 Everything else — CloudFront, Route 53, IAM — is global. The region those stacks
 are deployed in only decides where the bookkeeping lives, so they sit with the
 bucket.
+
+## Setting it up
 
 **1. Count visits (optional).** Register a site at
 [goatcounter.com](https://www.goatcounter.com/) and put the code in
@@ -120,12 +122,15 @@ The certificate in us-east-1, then bucket, distribution and publish role in
 whether the account already has a GitHub OIDC provider — there can only be one —
 and reuses it if so.
 
-**4. Hand the outputs to the repository**, so the button works.
+**4. Hand the outputs to the repository**, so the button works. This sets two
+secrets — `AWS_PUBLISH_ROLE` and `AWS_BUILD_FUNCTION` — which are what the
+workflow looks for before it will do anything.
 
+    gh auth switch --user <the account that owns the repo>
     ./deploy.sh secrets
 
-**5. Publish.** Either push to `main`, run the workflow by hand from the Actions
-tab, or do it from here without waiting for CI:
+**5. Publish.** Either press *Run workflow* on the Actions tab, or do it from
+here without waiting:
 
     ./deploy.sh publish
 
@@ -140,11 +145,16 @@ button, or `./deploy.sh publish` from a machine that has not been hammering the
 API. For the same reason the determinism check in `check.yml` only fetches when
 run by hand.
 
-Where the page opens, which language it starts in and the path it is served at
-are environment values in `.github/workflows/publish.yml`; the rest is
-`site.yaml`. A fetch that stalls is retried three times, waiting 5, 20 and 60
-seconds, which is enough to ride out the throttling seen in practice. If it
-still fails, nothing is published and yesterday's page keeps serving.
+Where the page opens and which language it starts in are environment variables
+on the build function, set by `./deploy.sh code` from `INITIAL_SCHOOL`,
+`INITIAL_CLASS` and `SITE_LANGUAGE` (defaults ProTERA, 8, et). The path, the
+domain, the region and the GoatCounter code come from `site.conf`, which travels
+in the bundle. The rest is `site.yaml`.
+
+The schedule is `cron(20 3 * * ? *)` — 03:20 UTC. A fetch that stalls is retried
+three times, waiting 5, 20 and 60 seconds, which is enough to ride out the
+throttling seen in practice. If it still fails, nothing is published and
+yesterday's page keeps serving.
 
 Changing the generator does not republish anything on its own. Push it to the
 function and run it:
@@ -175,8 +185,8 @@ OIDC role:
 
 ## Cost
 
-Storage and requests are rounding errors: half a megabyte, 38 KB gzipped per
-reader, and a minute of Actions a day. CloudFront's free tier should cover the traffic
+Storage and requests are rounding errors: half a megabyte, about 57 KB over the
+wire per reader, and a few seconds of Lambda a night. CloudFront's free tier should cover the traffic
 outright; past it, ten thousand visits a month is a few cents.
 
 The real line item is the **Route 53 hosted zone at $0.50/month**. The
@@ -191,9 +201,11 @@ The page republishes TERA's timetable — every class, teachers' full names, roo
 login. So nothing new is exposed. But an aggregated copy on someone else's domain
 can read as official, and it goes stale silently if the build stops.
 
-The footer says the page is unofficial, links the school's own page for each
-timetable, and prints the date the data was fetched. Telling the school before
-you publish is still worth the five minutes.
+The page says it is unofficial under its heading, beside a link to the school's
+own page for whichever timetable is shown and the date the data was read. A
+printed sheet carries the date and a QR code back to the page rather than the
+whole notice — worth knowing if sheets are what circulate. Telling the school
+before you publish is still worth the five minutes.
 
 ## Taking it down
 
