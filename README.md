@@ -116,6 +116,11 @@ bucket.
 empty and no analytics script is embedded at all, and the page says nothing
 about counting.
 
+Visits arrive one row per class — `/timetable/68/8`, titled with the school's
+own name for it. That is a label in the beacon, not the address a reader sees.
+Nothing a reader types is part of it; see the privacy note in the main README
+for why that took deliberate work.
+
 **2. The hosted zone, and the delegation.**
 
     export AWS_PROFILE=little-tools
