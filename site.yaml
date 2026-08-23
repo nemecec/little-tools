@@ -215,7 +215,18 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
-                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepo}:ref:refs/heads/${GitHubBranch}"
+                # GitHub has begun issuing subjects with immutable numeric ids
+                # appended to both names — repo:owner@1180780/name@1343690401:… —
+                # which the snippet everyone copies never matches. Accept that
+                # form as well as the plain one. The wildcards cover only the
+                # ids: a "@" cannot appear in a real owner or repository name,
+                # so this widens nothing.
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${GitHubRepo}:ref:refs/heads/${GitHubBranch}"
+                  - !Sub
+                    - "repo:${Owner}@*/${Name}@*:ref:refs/heads/${GitHubBranch}"
+                    - Owner: !Select [0, !Split ["/", !Ref GitHubRepo]]
+                      Name: !Select [1, !Split ["/", !Ref GitHubRepo]]
       Policies:
         - PolicyName: publish
           PolicyDocument:
