@@ -49,6 +49,21 @@ prefix, and the root page's link is substituted at publish time — so moving th
 page means editing one line. An environment variable of the same name overrides
 any of them for one command, which is how `OIDC=yes ./deploy.sh site` works.
 
+Two more are read from the environment only, since neither belongs in a file
+that describes the address:
+
+    REPO=nemecec/little-tools   which repository `./deploy.sh secrets` writes to
+    OIDC=yes|no                 whether this stack owns the account's GitHub
+                                OIDC provider; normally worked out on its own
+    YEAR=2026                   pin the school year the nightly build asks for;
+                                unset, it follows the calendar and rolls over
+                                in August
+
+**`DOMAIN` is not a thing to change afterwards.** The stack names are derived
+from it, so editing it does not move the site — it builds a second one beside
+the first and leaves the old zone billing at $0.50 a month. Take the old one
+down first; see below.
+
 ## Credentials
 
 The deploy needs an AWS profile with room to create CloudFormation stacks, S3
@@ -76,7 +91,8 @@ way, not the root user.
 
 ## Regions
 
-Fifteen resources across the three templates. One is pinned to a region and one
+Sixteen resources across the three templates — fourteen in `site.yaml`, and
+one each in `dns.yaml` and `cert.yaml`. One is pinned to a region and one
 is a choice; the rest are global or follow the bucket.
 
 **The certificate must be in us-east-1.** CloudFront reads certificates from
@@ -123,8 +139,10 @@ whether the account already has a GitHub OIDC provider — there can only be one
 and reuses it if so.
 
 **4. Hand the outputs to the repository**, so the button works. This sets two
-secrets — `AWS_PUBLISH_ROLE` and `AWS_BUILD_FUNCTION` — which are what the
-workflow looks for before it will do anything.
+secrets — `AWS_PUBLISH_ROLE` and `AWS_BUILD_FUNCTION`. The workflow checks for
+both and stops if either is missing, so a fork of this repository can never
+authenticate against someone else's account by accident. It writes to `REPO`,
+which defaults to `nemecec/little-tools`; set it if yours is elsewhere.
 
     gh auth switch --user <the account that owns the repo>
     ./deploy.sh secrets
@@ -185,8 +203,8 @@ OIDC role:
 
 ## Cost
 
-Storage and requests are rounding errors: half a megabyte, about 57 KB over the
-wire per reader, and a few seconds of Lambda a night. CloudFront's free tier should cover the traffic
+Storage and requests are rounding errors: half a megabyte on the shelf, about
+56 KB over the wire per reader once compressed, and a few seconds of Lambda a night. CloudFront's free tier should cover the traffic
 outright; past it, ten thousand visits a month is a few cents.
 
 The real line item is the **Route 53 hosted zone at $0.50/month**. The
@@ -207,12 +225,52 @@ printed sheet carries the date and a QR code back to the page rather than the
 whole notice — worth knowing if sheets are what circulate. Telling the school
 before you publish is still worth the five minutes.
 
+## When it goes wrong
+
+**The site loads from a terminal but not in a browser.** Every command-line
+check speaks HTTP/1.1 or HTTP/2, and a browser may be trying HTTP/3 — so `curl`,
+`dig` and `openssl` can all pass while Chrome shows `ERR_QUIC_PROTOCOL_ERROR`.
+That is why the distribution is set to `HttpVersion: http2`: it stops CloudFront
+advertising `alt-svc: h3` on a network where QUIC does not survive. If it comes
+back, check the response headers for `alt-svc` before looking anywhere else.
+
+**The address resolves to the wrong place after a change.** macOS keeps its own
+resolver cache that `dig` goes around, so the two can disagree for a while.
+`sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder`, then try the
+browser again — and give it a minute, because Chrome caches separately too.
+
+**`./deploy.sh site` says the OIDC provider is not authorized, cannot be
+validated, or already exists.** An account holds exactly one GitHub OIDC
+provider and the stack works out on its own whether it is the owner. If that
+answer is wrong — usually because a provider was created or deleted elsewhere —
+say so once: `OIDC=yes ./deploy.sh site` to take ownership, `OIDC=no` to leave
+it alone. Do not let CloudFormation fill in a thumbprint by itself; `site.yaml`
+pins one deliberately.
+
+**The nightly run publishes nothing.** Two reasons are normal: the timetable did
+not change (the generator is deterministic, so the page is byte-identical), or a
+school failed to fetch and the run refused to replace a full page with a
+smaller one. The second is a hard error and the log names the counts. Once the
+cause is understood, `PUBLISH_ANYWAY=1 ./deploy.sh publish` overrides it.
+
+**A build fails with something about JSON.** EduPage answers a lapsed session
+with a login page and HTTP 200. The error quotes what came back; there is
+nothing to fix locally, so try again.
+
 ## Taking it down
 
     aws --region eu-central-1 cloudformation delete-stack --stack-name little-tools-site
     aws --region us-east-1    cloudformation delete-stack --stack-name little-tools-cert
 
-The bucket is versioned, so empty it first if CloudFormation refuses. Deleting
+`delete-stack` returns straight away and the work carries on behind it. Wait for
+each before starting the next, or the certificate deletion fails while the
+distribution still holds it:
+
+    aws --region eu-central-1 cloudformation wait stack-delete-complete --stack-name little-tools-site
+    aws --region us-east-1    cloudformation wait stack-delete-complete --stack-name little-tools-cert
+
+The site stack takes fifteen minutes or so — CloudFront again. The bucket is
+versioned, so empty it first if CloudFormation refuses. Deleting
 the site stack also removes the publish role, which is the whole of what the
 repository can reach — revoking it needs nothing done on the GitHub side. The DNS
 stack can stay; deleting it releases the nameservers, which means pointing the

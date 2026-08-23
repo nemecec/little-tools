@@ -10,13 +10,13 @@ The address it publishes to comes from site.conf; the environment overrides it.
 """
 
 import datetime
-import hashlib
 import os
 import pathlib
 import re
 import subprocess
 import sys
 import tempfile
+import uuid
 
 # Run from a checkout, tt.py is one directory up; run from the Lambda bundle,
 # it sits alongside. Both are on the path so neither layout is special.
@@ -47,7 +47,7 @@ DISTRIBUTION = os.environ["DISTRIBUTION"]
 PREFIX = configured("PREFIX").strip("/")
 GOATCOUNTER = configured("GOATCOUNTER")
 EDUPAGE = os.environ.get("EDUPAGE", "tera")
-YEAR = int(os.environ.get("YEAR", "2026"))
+YEAR = int(configured("YEAR", str(tt.school_year())))
 INITIAL_SCHOOL = os.environ.get("INITIAL_SCHOOL", "")
 INITIAL_CLASS = os.environ.get("INITIAL_CLASS", "")
 LANGUAGE = os.environ.get("SITE_LANGUAGE", "en")
@@ -98,17 +98,25 @@ class ThroughBoto:
             return self.s3.get_object(Bucket=BUCKET, Key=key)["Body"].read()
         except self.s3.exceptions.NoSuchKey:
             return None
+        except self.s3.exceptions.ClientError as exc:
+            # Without s3:ListBucket, S3 answers a missing key with 403 rather
+            # than 404, so the first publish of all would look like an error.
+            if exc.response["Error"]["Code"] in ("NoSuchKey", "404", "AccessDenied"):
+                return None
+            raise
 
     def put(self, key, body):
         self.s3.put_object(Bucket=BUCKET, Key=key, Body=body,
                            ContentType=HTML, CacheControl=CACHE)
 
     def invalidate(self, paths):
+        # The reference must differ every time. Reuse it and CloudFront hands
+        # back the first invalidation instead of making a new one, so every
+        # night after the first would quietly do nothing.
         self.cloudfront.create_invalidation(
             DistributionId=DISTRIBUTION,
             InvalidationBatch={"Paths": {"Quantity": len(paths), "Items": list(paths)},
-                               "CallerReference": hashlib.sha256(
-                                   "".join(paths).encode()).hexdigest()[:32] + str(len(paths))})
+                               "CallerReference": uuid.uuid4().hex})
 
 
 store = ThroughBoto() if boto3 else ThroughCli()
@@ -139,20 +147,45 @@ def upload(text, key):
     store.put(key, text if isinstance(text, bytes) else text.encode("utf-8"))
 
 
+def landing(key):
+    """The pages around the timetable: a root that points at it, and a 404.
+
+    They go up on every run, not only when the timetable changed — otherwise an
+    edit to either one never reaches the site on a quiet day. With no prefix the
+    timetable *is* the root page, so there is nothing here to publish over it.
+    """
+    for name in ("index.html", "404.html"):
+        if name == key:
+            continue
+        upload((HERE / name).read_text(encoding="utf-8").replace("__PREFIX__", PREFIX), name)
+
+
 def main():
     body, schools, slots = build()
     key = f"{PREFIX}/index.html" if PREFIX else "index.html"
 
     current = published(key)
     if current is not None and same(current, body):
-        print(f"{key}: unchanged, nothing published")
+        landing(key)
+        store.invalidate(["/*"])
+        print(f"{key}: unchanged, only the surrounding pages published")
         return 0
+
+    # A timetable that errors upstream is skipped with a warning rather than
+    # failing the build, which is right for one class going missing and wrong
+    # for a whole school. Refuse to replace a page with a smaller one unless
+    # told to; the previous page keeps serving and the run is visibly red.
+    if current is not None and not os.environ.get("PUBLISH_ANYWAY"):
+        was = current.count(b'"ttNum"')
+        if was and schools < was:
+            raise SystemExit(
+                f"refusing to publish: {schools} schools built, {was} are live. "
+                f"A timetable probably failed to fetch. Set PUBLISH_ANYWAY=1 to override.")
 
     upload(body, key)
     # The root page links to whatever the prefix says, rather than keeping its
     # own copy of it to fall out of step with.
-    for name in ("index.html", "404.html"):
-        upload((HERE / name).read_text(encoding="utf-8").replace("__PREFIX__", PREFIX), name)
+    landing(key)
 
     store.invalidate(["/*"])
     print(f"published {key}: {schools} schools, {slots} lesson slots, {len(body)} bytes")

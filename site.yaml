@@ -136,7 +136,7 @@ Resources:
               default-src 'none';
               script-src 'unsafe-inline' https://gc.zgo.at;
               style-src 'unsafe-inline';
-              img-src 'self' data:;
+              img-src 'self' data: https://*.goatcounter.com;
               connect-src https://*.goatcounter.com;
               form-action 'none';
               frame-ancestors 'none';
@@ -273,6 +273,9 @@ Resources:
                 Action: [s3:PutObject, s3:GetObject]
                 Resource: !Sub "${Bucket.Arn}/*"
               - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt Bucket.Arn
+              - Effect: Allow
                 Action: cloudfront:CreateInvalidation
                 Resource: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
 
@@ -292,7 +295,7 @@ Resources:
       Runtime: python3.13
       Handler: lambda_function.handler
       Role: !GetAtt BuildRole.Arn
-      Timeout: 300
+      Timeout: 900
       MemorySize: 512
       Environment:
         Variables:

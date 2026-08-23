@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Set up the AWS side of little.tools. The publishing itself lives in the
-# repository's workflow; this only builds what that workflow publishes into.
+# Set up the AWS side of little.tools. The nightly rebuild runs in AWS, from
+# EventBridge into a Lambda; this puts that, and everything it publishes into,
+# in place. The repository's workflow only asks the Lambda to run early.
 #
 #   ./deploy.sh dns       once, first: the hosted zone, and the nameservers to
 #                         set at the registrar
@@ -59,7 +60,7 @@ dns)
   ;;
 
 site)
-  zone="$(output "$DNS_STACK" HostedZoneId)"
+  zone="$(output "$DNS_STACK" HostedZoneId 2>/dev/null || true)"
   [ -n "$zone" ] || { echo "no hosted zone; run ./deploy.sh dns first" >&2; exit 1; }
 
   # The certificate first, in the only region CloudFront will take one from.
@@ -103,7 +104,7 @@ site)
 code)
   # The nightly build runs from a bundle rather than the checkout, so the layout
   # is flattened: publish.py finds tt.py beside it either way.
-  fn="$(output "$SITE_STACK" BuildFunctionName)"
+  fn="$(output "$SITE_STACK" BuildFunctionName 2>/dev/null || true)"
   [ -n "$fn" ] || { echo "no site stack; run ./deploy.sh site first" >&2; exit 1; }
   work="$(mktemp -d)"
   trap 'rm -rf "$work"' EXIT
@@ -119,7 +120,8 @@ code)
     --environment "Variables={BUCKET=$(output "$SITE_STACK" BucketName),\
 DISTRIBUTION=$(output "$SITE_STACK" DistributionId),\
 GOATCOUNTER=${GOATCOUNTER:-},INITIAL_SCHOOL=${INITIAL_SCHOOL:-ProTERA},\
-INITIAL_CLASS=${INITIAL_CLASS:-8},SITE_LANGUAGE=${SITE_LANGUAGE:-et}}" \
+INITIAL_CLASS=${INITIAL_CLASS:-8},SITE_LANGUAGE=${SITE_LANGUAGE:-et},\
+PREFIX=$PREFIX,YEAR=${YEAR:-}}" \
     --output text --query LastModified
   echo "pushed the generator to $fn"
   ;;
@@ -151,7 +153,7 @@ publish)
   ;;
 
 *)
-  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
   exit 1
   ;;
 esac
