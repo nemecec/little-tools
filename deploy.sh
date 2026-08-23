@@ -107,8 +107,9 @@ code)
   [ -n "$fn" ] || { echo "no site stack; run ./deploy.sh site first" >&2; exit 1; }
   work="$(mktemp -d)"
   trap 'rm -rf "$work"' EXIT
-  cp "$here/../tt.py" "$here/publish.py" "$here/lambda_function.py" \
-     "$here/site.conf" "$here/index.html" "$here/404.html" "$work/"
+  cp "$here/../tt.py" "$here/../page.js" "$here/publish.py" \
+     "$here/lambda_function.py" "$here/site.conf" "$here/index.html" \
+     "$here/404.html" "$work/"
   cp -R "$here/../vendor" "$work/vendor"
   (cd "$work" && zip -qr bundle.zip .)
   aws lambda update-function-code --function-name "$fn" \

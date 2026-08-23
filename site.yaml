@@ -119,6 +119,41 @@ Resources:
           return request;
         }
 
+  # A page this simple can say exactly what it is allowed to do, which turns any
+  # future injection into a defacement rather than script execution. It is one
+  # self-contained file: the only things it fetches are the counter's script and
+  # the beacon it sends. 'unsafe-inline' is unavoidable — the whole page is
+  # inline by design — so the policy earns its keep on the other directives.
+  SecurityHeaders:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "headers"]]
+        SecurityHeadersConfig:
+          ContentSecurityPolicy:
+            Override: true
+            ContentSecurityPolicy: >-
+              default-src 'none';
+              script-src 'unsafe-inline' https://gc.zgo.at;
+              style-src 'unsafe-inline';
+              img-src 'self' data:;
+              connect-src https://*.goatcounter.com;
+              form-action 'none';
+              frame-ancestors 'none';
+              base-uri 'none'
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            Override: true
+            FrameOption: DENY
+          ReferrerPolicy:
+            Override: true
+            ReferrerPolicy: strict-origin-when-cross-origin
+          StrictTransportSecurity:
+            Override: true
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+
   Distribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -152,6 +187,7 @@ Resources:
           Compress: true
           # CachingOptimized, AWS managed
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: !Ref SecurityHeaders
           FunctionAssociations:
             - EventType: viewer-request
               FunctionARN: !GetAtt IndexRewrite.FunctionMetadata.FunctionARN
