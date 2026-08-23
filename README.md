@@ -151,6 +151,14 @@ function and run it:
 
     ./deploy.sh code && ./deploy.sh publish
 
+The distribution speaks **HTTP/2 and not HTTP/3**, deliberately. Advertising
+HTTP/3 sets an `alt-svc: h3` header, a browser then tries QUIC over UDP, and a
+network that carries TCP perfectly well may drop or mangle that — a corporate
+VPN being the usual culprit. The browser caches the advertisement for a day and
+keeps retrying, so the site fails intermittently with `ERR_QUIC_PROTOCOL_ERROR`
+while DNS, TCP and curl all look healthy. For one small file behind a cache
+there is nothing to win by it.
+
 Two things cost real time to work out, and are worth knowing before touching the
 OIDC role:
 

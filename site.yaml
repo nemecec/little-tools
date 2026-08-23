@@ -129,7 +129,13 @@ Resources:
           - !Ref DomainName
           - !Sub "www.${DomainName}"
         DefaultRootObject: index.html
-        HttpVersion: http2and3
+        # HTTP/2 only. Advertising HTTP/3 makes a browser try QUIC over UDP, and
+        # a network that passes TCP happily may drop or mangle that — corporate
+        # VPNs are the usual culprit. The browser then caches the advertisement
+        # for a day and keeps retrying, so the page fails intermittently with
+        # ERR_QUIC_PROTOCOL_ERROR while every other check looks healthy. There
+        # is nothing to win here: this is one small file behind a cache.
+        HttpVersion: http2
         IPV6Enabled: true
         PriceClass: PriceClass_100
         Origins:
