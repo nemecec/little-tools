@@ -28,6 +28,13 @@ Parameters:
     Type: String
     Default: main
     Description: The only branch whose workflows may assume the publish role.
+  Schedule:
+    Type: String
+    Default: cron(20 3 * * ? *)
+    Description: >
+      When to rebuild. On AWS rather than in the repository, because GitHub
+      switches a scheduled workflow off after sixty days of quiet and this one
+      would have nothing to be busy about.
   CreateOidcProvider:
     Type: String
     Default: "yes"
@@ -202,11 +209,82 @@ Resources:
         - 6938fd4d98bab03faadb97b34396831e3780aea1
         - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
 
+  # -------------------------------------------------------- scheduled build --
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "build"]]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: publish
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:PutObject, s3:GetObject]
+                Resource: !Sub "${Bucket.Arn}/*"
+              - Effect: Allow
+                Action: cloudfront:CreateInvalidation
+                Resource: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+  BuildLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ["", ["/aws/lambda/", !Join ["-", !Split [".", !Ref DomainName]], "-build"]]
+      RetentionInDays: 30
+
+  # The real code is pushed by deploy.sh: a template's inline body is capped at
+  # 4 KB and the generator alone is twenty times that.
+  BuildFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: BuildLogs
+    Properties:
+      FunctionName: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "build"]]
+      Runtime: python3.13
+      Handler: lambda_function.handler
+      Role: !GetAtt BuildRole.Arn
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          BUCKET: !Ref Bucket
+          DISTRIBUTION: !Ref Distribution
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              raise RuntimeError("placeholder — run deploy.sh to push the real code")
+
+  BuildSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "rebuild"]]
+      Description: Rebuild the timetable from the school's public data
+      ScheduleExpression: !Ref Schedule
+      State: ENABLED
+      Targets:
+        - Id: build
+          Arn: !GetAtt BuildFunction.Arn
+
+  SchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt BuildFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt BuildSchedule.Arn
+
   PublishRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "publish"]]
-      Description: Assumed by the repository's publish workflow
+      Description: Assumed by the repository's workflow, to ask for a rebuild
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -234,21 +312,19 @@ Resources:
                     - Owner: !Select [0, !Split ["/", !Ref GitHubRepo]]
                       Name: !Select [1, !Split ["/", !Ref GitHubRepo]]
       Policies:
-        - PolicyName: publish
+        # Asking for a rebuild is all the repository can do. It cannot write to
+        # the bucket, and it cannot reach anything else in the account.
+        - PolicyName: ask-for-a-rebuild
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action: [s3:PutObject, s3:GetObject]
-                Resource: !Sub "${Bucket.Arn}/*"
-              - Effect: Allow
-                Action: s3:ListBucket
-                Resource: !GetAtt Bucket.Arn
-              - Effect: Allow
-                Action: cloudfront:CreateInvalidation
-                Resource: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt BuildFunction.Arn
 
 Outputs:
+  BuildFunctionName:
+    Value: !Ref BuildFunction
   BucketName:
     Value: !Ref Bucket
   DistributionId:

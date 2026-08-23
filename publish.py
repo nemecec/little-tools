@@ -10,6 +10,7 @@ The address it publishes to comes from site.conf; the environment overrides it.
 """
 
 import datetime
+import hashlib
 import os
 import pathlib
 import re
@@ -17,11 +18,16 @@ import subprocess
 import sys
 import tempfile
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+# Run from a checkout, tt.py is one directory up; run from the Lambda bundle,
+# it sits alongside. Both are on the path so neither layout is special.
+_here = pathlib.Path(__file__).resolve().parent
+for candidate in (_here.parent, _here):
+    if str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
 
 import tt
 
-HERE = pathlib.Path(__file__).resolve().parent
+HERE = _here
 
 
 def configured(name, fallback=""):
@@ -39,7 +45,7 @@ def configured(name, fallback=""):
 BUCKET = os.environ["BUCKET"]
 DISTRIBUTION = os.environ["DISTRIBUTION"]
 PREFIX = configured("PREFIX").strip("/")
-GOATCOUNTER = os.environ.get("GOATCOUNTER", "")
+GOATCOUNTER = configured("GOATCOUNTER")
 EDUPAGE = os.environ.get("EDUPAGE", "tera")
 YEAR = int(os.environ.get("YEAR", "2026"))
 INITIAL_SCHOOL = os.environ.get("INITIAL_SCHOOL", "")
@@ -52,9 +58,60 @@ HTML = "text/html; charset=utf-8"
 CACHE = "public, max-age=300"
 
 
-def aws(*args, region=REGION, **kw):
-    return subprocess.run(["aws", "--region", region, *args],
-                          check=True, capture_output=True, **kw)
+# S3 and CloudFront are reached through boto3 where it exists — inside a Lambda
+# — and through the CLI everywhere else, so a checkout needs nothing installed.
+try:
+    import boto3
+except ImportError:
+    boto3 = None
+
+
+class ThroughCli:
+    def get(self, key):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "current")
+            done = subprocess.run(["aws", "--region", REGION, "s3", "cp",
+                                   f"s3://{BUCKET}/{key}", out], capture_output=True)
+            return pathlib.Path(out).read_bytes() if done.returncode == 0 else None
+
+    def put(self, key, body):
+        with tempfile.TemporaryDirectory() as tmp:
+            local = pathlib.Path(tmp, "upload")
+            local.write_bytes(body)
+            subprocess.run(["aws", "--region", REGION, "s3", "cp", str(local),
+                            f"s3://{BUCKET}/{key}", "--content-type", HTML,
+                            "--cache-control", CACHE], check=True, capture_output=True)
+
+    def invalidate(self, paths):
+        subprocess.run(["aws", "--region", CLOUDFRONT_REGION, "cloudfront",
+                        "create-invalidation", "--distribution-id", DISTRIBUTION,
+                        "--paths", *paths], check=True, capture_output=True)
+
+
+class ThroughBoto:
+    def __init__(self):
+        self.s3 = boto3.client("s3", region_name=REGION)
+        self.cloudfront = boto3.client("cloudfront", region_name=CLOUDFRONT_REGION)
+
+    def get(self, key):
+        try:
+            return self.s3.get_object(Bucket=BUCKET, Key=key)["Body"].read()
+        except self.s3.exceptions.NoSuchKey:
+            return None
+
+    def put(self, key, body):
+        self.s3.put_object(Bucket=BUCKET, Key=key, Body=body,
+                           ContentType=HTML, CacheControl=CACHE)
+
+    def invalidate(self, paths):
+        self.cloudfront.create_invalidation(
+            DistributionId=DISTRIBUTION,
+            InvalidationBatch={"Paths": {"Quantity": len(paths), "Items": list(paths)},
+                               "CallerReference": hashlib.sha256(
+                                   "".join(paths).encode()).hexdigest()[:32] + str(len(paths))})
+
+
+store = ThroughBoto() if boto3 else ThroughCli()
 
 
 def build():
@@ -69,13 +126,7 @@ def build():
 
 def published(key):
     """What is on the site now, or None if nothing is."""
-    with tempfile.TemporaryDirectory() as tmp:
-        out = os.path.join(tmp, "current")
-        try:
-            aws("s3", "cp", f"s3://{BUCKET}/{key}", out)
-        except subprocess.CalledProcessError:
-            return None
-        return pathlib.Path(out).read_bytes()
+    return store.get(key)
 
 
 def same(a, b):
@@ -84,9 +135,8 @@ def same(a, b):
     return strip(a) == strip(b)
 
 
-def upload(path, key):
-    aws("s3", "cp", path, f"s3://{BUCKET}/{key}",
-        "--content-type", HTML, "--cache-control", CACHE)
+def upload(text, key):
+    store.put(key, text if isinstance(text, bytes) else text.encode("utf-8"))
 
 
 def main():
@@ -98,21 +148,13 @@ def main():
         print(f"{key}: unchanged, nothing published")
         return 0
 
-    with tempfile.TemporaryDirectory() as tmp:
-        page = pathlib.Path(tmp, "index.html")
-        page.write_bytes(body)
-        upload(str(page), key)
-        # The root page links to whatever the prefix says, rather than keeping
-        # its own copy of it to fall out of step with.
-        for name in ("index.html", "404.html"):
-            local = pathlib.Path(tmp, "root-" + name)
-            local.write_text(
-                (HERE / name).read_text(encoding="utf-8").replace("__PREFIX__", PREFIX),
-                encoding="utf-8")
-            upload(str(local), name)
+    upload(body, key)
+    # The root page links to whatever the prefix says, rather than keeping its
+    # own copy of it to fall out of step with.
+    for name in ("index.html", "404.html"):
+        upload((HERE / name).read_text(encoding="utf-8").replace("__PREFIX__", PREFIX), name)
 
-    aws("cloudfront", "create-invalidation", "--distribution-id", DISTRIBUTION,
-        "--paths", "/*", region=CLOUDFRONT_REGION)
+    store.invalidate(["/*"])
     print(f"published {key}: {schools} schools, {slots} lesson slots, {len(body)} bytes")
     return 0
 

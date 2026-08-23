@@ -3,18 +3,23 @@
 The timetable at `https://little.tools/timetable/`, rebuilt nightly from the
 school's public data.
 
-    GitHub Actions (nightly)
-       └→ tt.py  →  S3 (private)  →  CloudFront  →  readers
+    EventBridge (nightly)  →  Lambda: tt.py  →  S3 (private)  →  CloudFront  →  readers
+                                  ↑
+                       GitHub Actions, when asked
 
 Nothing is in the request path. Readers get a static object from an edge cache,
 so a failed build leaves yesterday's page serving rather than an error. The
 generator is deterministic, so a day with no timetable change renders
 byte-identical output and the run publishes nothing at all.
 
-The workflow authenticates with a short-lived OIDC token: there is no access key
-in the repository, in a secret, or on a laptop. AWS holds a role that only
-`main` of one named repository can assume, and that role can do nothing but
-write to this bucket and invalidate this distribution.
+The schedule is in AWS rather than in the repository because GitHub switches a
+scheduled workflow off after sixty days without repository activity, and a page
+that only needs rebuilding — never editing — would reach that and stop quietly.
+
+The workflow remains as a button for when tonight is too far off. It holds no
+key: it exchanges a short-lived OIDC token for a role that only `main` of one
+named repository can assume, and that role can do exactly one thing — ask the
+build function to run. It cannot write to the bucket or reach anything else.
 
 ## What is here
 
@@ -24,7 +29,8 @@ write to this bucket and invalidate this distribution.
 | `dns.yaml` | the Route 53 hosted zone, on its own |
 | `cert.yaml` | the TLS certificate, in us-east-1 because it must be |
 | `site.yaml` | bucket, CloudFront, the role Actions assumes |
-| `publish.py` | build and publish; run by the workflow, and by hand |
+| `publish.py` | build and publish; run by the Lambda, and by hand |
+| `lambda_function.py` | the nightly run's entry point |
 | `index.html`, `404.html` | the site root |
 | `deploy.sh` | the commands below |
 
@@ -87,9 +93,10 @@ are deployed in only decides where the bookkeeping lives, so they sit with the
 bucket.
 
 **1. Count visits (optional).** Register a site at
-[goatcounter.com](https://www.goatcounter.com/) and note the code; the page will
-be counted at `<code>.goatcounter.com`. Without it no analytics script is
-embedded at all, and the footer says nothing about counting.
+[goatcounter.com](https://www.goatcounter.com/) and put the code in
+`site.conf`; the page is then counted at `<code>.goatcounter.com`. Leave it
+empty and no analytics script is embedded at all, and the page says nothing
+about counting.
 
 **2. The hosted zone, and the delegation.**
 
@@ -113,10 +120,9 @@ The certificate in us-east-1, then bucket, distribution and publish role in
 whether the account already has a GitHub OIDC provider — there can only be one —
 and reuses it if so.
 
-**4. Hand the outputs to the repository.**
+**4. Hand the outputs to the repository**, so the button works.
 
     ./deploy.sh secrets
-    gh variable set GOATCOUNTER_SITE --repo nemecec/little-tools --body your-code
 
 **5. Publish.** Either push to `main`, run the workflow by hand from the Actions
 tab, or do it from here without waiting for CI:
@@ -125,8 +131,8 @@ tab, or do it from here without waiting for CI:
 
 ## Afterwards
 
-Publishing happens on the nightly schedule and when you press *Run workflow* —
-never on a push. The school's server rations how often one address may ask for
+Publishing happens on the nightly EventBridge schedule and when you press *Run
+workflow* — never on a push. The school's server rations how often one address may ask for
 everything, and it starts timing out a caller that has just done so several
 times over; a day of ordinary commits could spend that ration before the nightly
 run gets its turn. After changing the generator, publish deliberately: the
@@ -140,11 +146,20 @@ are environment values in `.github/workflows/publish.yml`; the rest is
 seconds, which is enough to ride out the throttling seen in practice. If it
 still fails, nothing is published and yesterday's page keeps serving.
 
-**Scheduled workflows stop after 60 days without repository activity.** GitHub
-warns the owner by email first. A term-time timetable changes often enough that
-this rarely bites, but a quiet summer can reach it — if the page looks stale,
-check the Actions tab before suspecting the generator. Worth confirming the
-current rule; it has changed before.
+Changing the generator does not republish anything on its own. Push it to the
+function and run it:
+
+    ./deploy.sh code && ./deploy.sh publish
+
+Two things cost real time to work out, and are worth knowing before touching the
+OIDC role:
+
+- GitHub now issues subjects with immutable ids appended to both names —
+  `repo:owner@1180780/name@1343690401:ref:…` — which the trust policy everyone
+  copies never matches. Both forms are accepted.
+- Omit `ThumbprintList` and CloudFormation fills in one of its own. A token
+  signed under a different chain is then refused with nothing more useful than
+  *the web identity token provided could not be validated*.
 
 ## Cost
 

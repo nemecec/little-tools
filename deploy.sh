@@ -5,8 +5,9 @@
 #   ./deploy.sh dns       once, first: the hosted zone, and the nameservers to
 #                         set at the registrar
 #   ./deploy.sh site      certificate, bucket, CloudFront, publish role
+#   ./deploy.sh code      push the generator to the Lambda that runs nightly
 #   ./deploy.sh secrets   hand the stack's outputs to the GitHub repository
-#   ./deploy.sh publish   build and publish from here, without waiting for CI
+#   ./deploy.sh publish   build and publish from here, without waiting for anything
 #
 # The bucket and the stacks live in REGION from site.conf. The certificate is
 # its own stack in us-east-1, because CloudFront reads certificates from nowhere
@@ -19,11 +20,13 @@ here="$(cd "$(dirname "$0")" && pwd)"
 # site.conf is the one place the address is written down; the environment wins
 # over it, for trying something out without editing the file.
 from_env_domain="${DOMAIN:-}" from_env_prefix="${PREFIX:-}" from_env_region="${REGION:-}"
+from_env_gc="${GOATCOUNTER:-}"
 # shellcheck source=site.conf
 . "$here/site.conf"
 DOMAIN="${from_env_domain:-$DOMAIN}"
 PREFIX="${from_env_prefix:-$PREFIX}"
 REGION="${from_env_region:-$REGION}"
+GOATCOUNTER="${from_env_gc:-${GOATCOUNTER:-}}"
 
 REPO="${REPO:-nemecec/little-tools}"
 CERT_REGION="us-east-1"          # not a preference; CloudFront allows no other
@@ -82,8 +85,32 @@ site)
     --parameter-overrides \
       "DomainName=$DOMAIN" "HostedZoneId=$zone" "CertificateArn=$cert" \
       "GitHubRepo=$REPO" "CreateOidcProvider=$oidc"
+  "$here/deploy.sh" code
   echo
   echo "Live at $(output "$SITE_STACK" SiteUrl) once something has been published."
+  ;;
+
+code)
+  # The nightly build runs from a bundle rather than the checkout, so the layout
+  # is flattened: publish.py finds tt.py beside it either way.
+  fn="$(output "$SITE_STACK" BuildFunctionName)"
+  [ -n "$fn" ] || { echo "no site stack; run ./deploy.sh site first" >&2; exit 1; }
+  work="$(mktemp -d)"
+  trap 'rm -rf "$work"' EXIT
+  cp "$here/../tt.py" "$here/publish.py" "$here/lambda_function.py" \
+     "$here/site.conf" "$here/index.html" "$here/404.html" "$work/"
+  cp -R "$here/../vendor" "$work/vendor"
+  (cd "$work" && zip -qr bundle.zip .)
+  aws lambda update-function-code --function-name "$fn" \
+    --zip-file "fileb://$work/bundle.zip" --output text --query LastModified
+  aws lambda wait function-updated --function-name "$fn"
+  aws lambda update-function-configuration --function-name "$fn" \
+    --environment "Variables={BUCKET=$(output "$SITE_STACK" BucketName),\
+DISTRIBUTION=$(output "$SITE_STACK" DistributionId),\
+GOATCOUNTER=${GOATCOUNTER:-},INITIAL_SCHOOL=${INITIAL_SCHOOL:-ProTERA},\
+INITIAL_CLASS=${INITIAL_CLASS:-8},SITE_LANGUAGE=${SITE_LANGUAGE:-et}}" \
+    --output text --query LastModified
+  echo "pushed the generator to $fn"
   ;;
 
 secrets)
@@ -95,12 +122,9 @@ secrets)
     echo "  gh auth switch --user <account>" >&2
     exit 1
   fi
-  gh secret set AWS_PUBLISH_ROLE --repo "$REPO" --body "$(output "$SITE_STACK" PublishRoleArn)"
-  gh secret set AWS_BUCKET       --repo "$REPO" --body "$(output "$SITE_STACK" BucketName)"
-  gh secret set AWS_DISTRIBUTION --repo "$REPO" --body "$(output "$SITE_STACK" DistributionId)"
-  echo "set AWS_PUBLISH_ROLE, AWS_BUCKET and AWS_DISTRIBUTION on $REPO"
-  echo
-  echo "For page counts, also:  gh variable set GOATCOUNTER_SITE --repo $REPO --body <code>"
+  gh secret set AWS_PUBLISH_ROLE  --repo "$REPO" --body "$(output "$SITE_STACK" PublishRoleArn)"
+  gh secret set AWS_BUILD_FUNCTION --repo "$REPO" --body "$(output "$SITE_STACK" BuildFunctionName)"
+  echo "set AWS_PUBLISH_ROLE and AWS_BUILD_FUNCTION on $REPO"
   ;;
 
 publish)
