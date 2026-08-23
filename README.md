@@ -57,7 +57,11 @@ long-lived key on disk:
 1. In the console, open **IAM Identity Center**, enable it if it is not, and give
    yourself a user with **AdministratorAccess** on the account.
 2. `aws configure sso --profile little-tools` — paste the portal's start URL when
-   asked. Any default region will do; the scripts pin their own.
+   asked, and answer `eu-central-1` for the CLI's default region. Nothing here
+   depends on it, since every call these scripts make names its own region; it
+   only decides where a bare `aws` command you type lands, and that is where the
+   bucket and both main stacks are. The exception is the certificate stack,
+   which needs `--region us-east-1` to look at.
 3. `aws sso login --profile little-tools`, then `export AWS_PROFILE=little-tools`
    in the shell you deploy from.
 
