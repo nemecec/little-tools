@@ -223,8 +223,8 @@ OIDC role:
 
 ## Cost
 
-Storage and requests are rounding errors: half a megabyte on the shelf, about
-56 KB over the wire per reader once compressed, and a few seconds of Lambda a night. CloudFront's free tier should cover the traffic
+Storage and requests are rounding errors: about 600 KB on the shelf and 75 KB
+over the wire per reader once compressed, and a few seconds of Lambda a night. CloudFront's free tier should cover the traffic
 outright; past it, ten thousand visits a month is a few cents.
 
 The real line item is the **Route 53 hosted zone at $0.50/month**. The
