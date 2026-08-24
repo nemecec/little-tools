@@ -44,6 +44,22 @@ output() {  # stack, key, [region]
     --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text
 }
 
+# "The stack is not there" and "I could not ask" are different answers, and the
+# guards below act on the first. Conflating them turned an expired SSO token
+# into "run ./deploy.sh dns first" — advice that would build a second hosted
+# zone beside the one already serving the site.
+maybe_output() {  # stack, key, [region] — empty if absent, exits if unreachable
+  local out status
+  out="$(output "$1" "$2" "${3:-}" 2>&1)"; status=$?
+  if [ $status -eq 0 ]; then printf '%s' "$out"; return 0; fi
+  case "$out" in
+    *"does not exist"*|*ValidationError*) return 0 ;;
+    *) echo "cannot reach CloudFormation: $out" >&2
+       echo "  aws sso login --profile ${AWS_PROFILE:-default}" >&2
+       exit 1 ;;
+  esac
+}
+
 case "${1:-}" in
 
 dns)
@@ -61,7 +77,7 @@ dns)
   ;;
 
 site)
-  zone="$(output "$DNS_STACK" HostedZoneId 2>/dev/null || true)"
+  zone="$(maybe_output "$DNS_STACK" HostedZoneId)"
   [ -n "$zone" ] || { echo "no hosted zone; run ./deploy.sh dns first" >&2; exit 1; }
 
   # The certificate first, in the only region CloudFront will take one from.
@@ -106,7 +122,7 @@ site)
 code)
   # The nightly build runs from a bundle rather than the checkout, so the layout
   # is flattened: publish.py finds tt.py beside it either way.
-  fn="$(output "$SITE_STACK" BuildFunctionName 2>/dev/null || true)"
+  fn="$(maybe_output "$SITE_STACK" BuildFunctionName)"
   [ -n "$fn" ] || { echo "no site stack; run ./deploy.sh site first" >&2; exit 1; }
   work="$(mktemp -d)"
   trap 'rm -rf "$work"' EXIT
