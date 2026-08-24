@@ -52,6 +52,8 @@ any of them for one command, which is how `OIDC=yes ./deploy.sh site` works.
 Two more are read from the environment only, since neither belongs in a file
 that describes the address:
 
+    ALARM_EMAIL=you@example.com where to write when a nightly build fails;
+                                unset means no alarm and no topic
     REPO=nemecec/little-tools   which repository `./deploy.sh secrets` writes to
     OIDC=yes|no                 whether this stack owns the account's GitHub
                                 OIDC provider; normally worked out on its own
@@ -91,8 +93,10 @@ way, not the root user.
 
 ## Regions
 
-Sixteen resources across the three templates — fourteen in `site.yaml`, and
-one each in `dns.yaml` and `cert.yaml`. One is pinned to a region and one
+Nineteen resources across the three templates: sixteen in `site.yaml`, two in
+`dns.yaml` (the zone and its CAA record) and one in `cert.yaml`. Two of
+`site.yaml`'s — the alarm and the topic it writes to — exist only when an alarm
+address is given. One is pinned to a region and one
 is a choice; the rest are global or follow the bucket.
 
 **The certificate must be in us-east-1.** CloudFront reads certificates from
@@ -156,6 +160,17 @@ which defaults to `nemecec/little-tools`; set it if yours is elsewhere.
 here without waiting:
 
     ./deploy.sh publish
+
+**6. Hear about it when the build breaks (worth doing).** EventBridge invokes
+the function asynchronously: it retries twice and then drops the failure, so
+without this nothing anywhere says the page has stopped being rebuilt.
+
+    ALARM_EMAIL=you@example.com ./deploy.sh site
+
+That creates an SNS topic and a CloudWatch alarm on the function's `Errors`
+metric. AWS sends a confirmation mail which has to be clicked before anything
+is delivered. A night the schedule never fires is deliberately not an alarm
+here — that is a different fault from the build breaking.
 
 ## Afterwards
 

@@ -28,6 +28,22 @@ Parameters:
     Type: String
     Default: main
     Description: The only branch whose workflows may assume the publish role.
+  AlarmEmail:
+    Type: String
+    Default: ""
+    Description: >
+      Where to write when the nightly build fails. Empty means no alarm and no
+      topic — the site then goes stale in silence, which is the default only
+      because an address cannot be guessed. AWS sends a confirmation mail that
+      has to be clicked before anything is delivered.
+  CounterSite:
+    Type: String
+    Default: ""
+    Description: >
+      The GoatCounter site code, if visits are counted. Only this one subdomain
+      is then allowed to be reached; goatcounter.com hands anyone a subdomain,
+      so a wildcard would leave a ready-made place to send data to. Empty
+      forbids the host outright.
   Schedule:
     Type: String
     Default: cron(20 3 * * ? *)
@@ -45,6 +61,8 @@ Parameters:
 
 Conditions:
   MakeOidcProvider: !Equals [!Ref CreateOidcProvider, "yes"]
+  Counting: !Not [!Equals [!Ref CounterSite, ""]]
+  Alarming: !Not [!Equals [!Ref AlarmEmail, ""]]
 
 Resources:
 
@@ -119,11 +137,20 @@ Resources:
           return request;
         }
 
-  # A page this simple can say exactly what it is allowed to do, which turns any
-  # future injection into a defacement rather than script execution. It is one
-  # self-contained file: the only things it fetches are the counter's script and
-  # the beacon it sends. 'unsafe-inline' is unavoidable — the whole page is
-  # inline by design — so the policy earns its keep on the other directives.
+  # What the page is allowed to reach. Be clear about what this does and does
+  # not buy: 'unsafe-inline' is in script-src because the whole page is one
+  # inline file, and that means the policy does NOT stop injected markup from
+  # executing. Escaping in page.js is what stops that; this is not a second
+  # line of defence behind it.
+  #
+  # What the policy does buy is that nothing can be *fetched* or *sent* anywhere
+  # unnamed: no third-party script beyond the counter, no image or beacon to an
+  # address that is not written here, no form post, no framing, no <base>. So an
+  # injection that does execute still cannot get anything out.
+  #
+  # The counter's host is named exactly, not by wildcard: goatcounter.com hands
+  # out subdomains to anyone, so `https://*.goatcounter.com` would name an
+  # exfiltration endpoint that is inside the policy.
   SecurityHeaders:
     Type: AWS::CloudFront::ResponseHeadersPolicy
     Properties:
@@ -132,15 +159,21 @@ Resources:
         SecurityHeadersConfig:
           ContentSecurityPolicy:
             Override: true
-            ContentSecurityPolicy: >-
-              default-src 'none';
-              script-src 'unsafe-inline' https://gc.zgo.at;
-              style-src 'unsafe-inline';
-              img-src 'self' data: https://*.goatcounter.com;
-              connect-src https://*.goatcounter.com;
-              form-action 'none';
-              frame-ancestors 'none';
-              base-uri 'none'
+            ContentSecurityPolicy: !Sub
+              - >-
+                default-src 'none';
+                script-src 'unsafe-inline' ${Counter};
+                style-src 'unsafe-inline';
+                img-src 'self' data: ${Beacon};
+                connect-src ${Beacon};
+                form-action 'none';
+                frame-ancestors 'none';
+                base-uri 'none'
+              - Counter: !If [Counting, "https://gc.zgo.at", "'none'"]
+                Beacon: !If
+                  - Counting
+                  - !Sub "https://${CounterSite}.goatcounter.com"
+                  - "'none'"
           ContentTypeOptions:
             Override: true
           FrameOptions:
@@ -297,6 +330,7 @@ Resources:
       Role: !GetAtt BuildRole.Arn
       Timeout: 900
       MemorySize: 512
+      ReservedConcurrentExecutions: 1
       Environment:
         Variables:
           BUCKET: !Ref Bucket
@@ -305,6 +339,42 @@ Resources:
         ZipFile: |
           def handler(event, context):
               raise RuntimeError("placeholder — run deploy.sh to push the real code")
+
+  # A page nobody is watching goes stale without saying so: EventBridge invokes
+  # asynchronously, retries twice, and then drops the failure on the floor. This
+  # is the only thing that speaks up. It needs somewhere to speak to, so it is
+  # only created when an address is given — see AlarmEmail.
+  BuildAlarmTopic:
+    Type: AWS::SNS::Topic
+    Condition: Alarming
+    Properties:
+      TopicName: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "build-alarm"]]
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlarmEmail
+
+  BuildFailed:
+    Type: AWS::CloudWatch::Alarm
+    Condition: Alarming
+    Properties:
+      AlarmName: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "build-failed"]]
+      AlarmDescription: >-
+        The nightly timetable build errored. The site keeps serving the last
+        good page, so nothing is down — but it is no longer being updated.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref BuildFunction
+      Statistic: Sum
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      # A night with no invocation at all is not a failure to report here; the
+      # schedule not firing is a different problem from the build breaking.
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref BuildAlarmTopic]
 
   BuildSchedule:
     Type: AWS::Events::Rule

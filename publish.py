@@ -10,6 +10,7 @@ The address it publishes to comes from site.conf; the environment overrides it.
 """
 
 import datetime
+import json
 import os
 import pathlib
 import re
@@ -72,7 +73,12 @@ class ThroughCli:
             out = os.path.join(tmp, "current")
             done = subprocess.run(["aws", "--region", REGION, "s3", "cp",
                                    f"s3://{BUCKET}/{key}", out], capture_output=True)
-            return pathlib.Path(out).read_bytes() if done.returncode == 0 else None
+            if done.returncode == 0:
+                return pathlib.Path(out).read_bytes()
+            why = done.stderr.decode("utf-8", "replace")
+            if "does not exist" in why or "Not Found" in why or "NoSuchKey" in why:
+                return None            # nothing published yet, which is fine
+            raise SystemExit(f"cannot read what is live at {key}: {why.strip()}")
 
     def put(self, key, body):
         with tempfile.TemporaryDirectory() as tmp:
@@ -99,9 +105,11 @@ class ThroughBoto:
         except self.s3.exceptions.NoSuchKey:
             return None
         except self.s3.exceptions.ClientError as exc:
-            # Without s3:ListBucket, S3 answers a missing key with 403 rather
-            # than 404, so the first publish of all would look like an error.
-            if exc.response["Error"]["Code"] in ("NoSuchKey", "404", "AccessDenied"):
+            # The role holds s3:ListBucket, so a missing key answers 404 and
+            # only a missing key does. A 403 here is a broken policy, and
+            # treating it as "nothing published yet" would turn off the guard
+            # below at exactly the moment it is needed.
+            if exc.response["Error"]["Code"] in ("NoSuchKey", "404"):
                 return None
             raise
 
@@ -135,6 +143,23 @@ def build():
 def published(key):
     """What is on the site now, or None if nothing is."""
     return store.get(key)
+
+
+def timetables_in(page):
+    """How many schools a published page carries, or None if it cannot be told.
+
+    Read out of the page's own data blob rather than guessed from the markup:
+    the keys are shortened on the way in — `ttNum` is written `n` — so counting
+    a long name finds nothing and silently answers "no schools live".
+    """
+    found = re.search(rb'<script id="data" type="application/json">(.*?)</script>',
+                      page, re.S)
+    if not found:
+        return None
+    try:
+        return len(json.loads(found.group(1).decode("utf-8"))["schools"])
+    except (ValueError, KeyError, TypeError):
+        return None
 
 
 def same(a, b):
@@ -176,8 +201,8 @@ def main():
     # for a whole school. Refuse to replace a page with a smaller one unless
     # told to; the previous page keeps serving and the run is visibly red.
     if current is not None and not os.environ.get("PUBLISH_ANYWAY"):
-        was = current.count(b'"ttNum"')
-        if was and schools < was:
+        was = timetables_in(current)
+        if was is not None and schools < was:
             raise SystemExit(
                 f"refusing to publish: {schools} schools built, {was} are live. "
                 f"A timetable probably failed to fetch. Set PUBLISH_ANYWAY=1 to override.")

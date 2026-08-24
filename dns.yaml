@@ -16,6 +16,22 @@ Resources:
     Properties:
       Name: !Ref DomainName
 
+  # Which authorities may issue for this name. Without a CAA record the answer
+  # is "any of them", so a mis-issued certificate anywhere in the world is a
+  # valid certificate for little.tools. The site's own certificate comes from
+  # ACM, so that is the only issuer named.
+  Caa:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref Zone
+      Name: !Ref DomainName
+      Type: CAA
+      TTL: "3600"
+      ResourceRecords:
+        - '0 issue "amazon.com"'
+        - '0 issuewild ";"'
+        - !Sub '0 iodef "mailto:postmaster@${DomainName}"'
+
 Outputs:
   HostedZoneId:
     Value: !Ref Zone

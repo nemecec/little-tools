@@ -21,13 +21,14 @@ here="$(cd "$(dirname "$0")" && pwd)"
 # site.conf is the one place the address is written down; the environment wins
 # over it, for trying something out without editing the file.
 from_env_domain="${DOMAIN:-}" from_env_prefix="${PREFIX:-}" from_env_region="${REGION:-}"
-from_env_gc="${GOATCOUNTER:-}"
+from_env_gc="${GOATCOUNTER:-}" from_env_alarm="${ALARM_EMAIL:-}"
 # shellcheck source=site.conf
 . "$here/site.conf"
 DOMAIN="${from_env_domain:-$DOMAIN}"
 PREFIX="${from_env_prefix:-$PREFIX}"
 REGION="${from_env_region:-$REGION}"
 GOATCOUNTER="${from_env_gc:-${GOATCOUNTER:-}}"
+ALARM_EMAIL="${from_env_alarm:-${ALARM_EMAIL:-}}"   # a failed build writes here
 
 REPO="${REPO:-nemecec/little-tools}"
 CERT_REGION="us-east-1"          # not a preference; CloudFront allows no other
@@ -95,7 +96,8 @@ site)
     --capabilities CAPABILITY_NAMED_IAM \
     --parameter-overrides \
       "DomainName=$DOMAIN" "HostedZoneId=$zone" "CertificateArn=$cert" \
-      "GitHubRepo=$REPO" "CreateOidcProvider=$oidc"
+      "GitHubRepo=$REPO" "CreateOidcProvider=$oidc" \
+      "CounterSite=${GOATCOUNTER:-}" "AlarmEmail=${ALARM_EMAIL:-}"
   "$here/deploy.sh" code
   echo
   echo "Live at $(output "$SITE_STACK" SiteUrl) once something has been published."
