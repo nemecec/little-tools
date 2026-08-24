@@ -1,25 +1,26 @@
 # Hosting little.tools
 
-The timetable at `https://little.tools/timetable/`, rebuilt nightly from the
-school's public data.
+The timetable at `https://little.tools/timetable/`. AWS rebuilds it every night
+from the school's public data.
 
     EventBridge (nightly)  →  Lambda: tt.py  →  S3 (private)  →  CloudFront  →  readers
                                   ↑
                        GitHub Actions, when asked
 
-Nothing is in the request path. Readers get a static object from an edge cache,
-so a failed build leaves yesterday's page serving rather than an error. The
-generator is deterministic, so a day with no timetable change renders
-byte-identical output and the run publishes nothing at all.
+Nothing sits in the request path. Readers get a static object from an edge
+cache. A failed build thus leaves yesterday's page in service, rather than an
+error. The generator is deterministic, so a day with no timetable change
+gives byte-identical output and the run publishes nothing at all.
 
-The schedule is in AWS rather than in the repository because GitHub switches a
-scheduled workflow off after sixty days without repository activity, and a page
-that only needs rebuilding — never editing — would reach that and stop quietly.
+The schedule lives in AWS rather than in the repository. GitHub switches a
+scheduled workflow off after sixty days without repository activity. This page
+needs a rebuild and never an edit, so it reaches that limit and stops without a
+word.
 
-The workflow remains as a button for when tonight is too far off. It holds no
-key: it exchanges a short-lived OIDC token for a role that only `main` of one
-named repository can assume, and that role can do exactly one thing — ask the
-build function to run. It cannot write to the bucket or reach anything else.
+The workflow stays as a button, for when tonight is too far off. It holds no
+key. It exchanges a short-lived OIDC token for a role that only `main` of one
+named repository can assume. That role can do exactly one thing: ask the build
+function to run. It cannot write to the bucket or reach anything else.
 
 ## What is here
 
@@ -29,8 +30,8 @@ build function to run. It cannot write to the bucket or reach anything else.
 | `dns.yaml` | the Route 53 hosted zone, on its own |
 | `cert.yaml` | the TLS certificate, in us-east-1 because it must be |
 | `site.yaml` | bucket, CloudFront, the role Actions assumes |
-| `publish.py` | build and publish; run by the Lambda, and by hand |
-| `lambda_function.py` | the nightly run's entry point |
+| `publish.py` | build and publish — run by the Lambda, and by hand |
+| `lambda_function.py` | the entry point for the nightly run |
 | `index.html`, `404.html` | the site root |
 | `deploy.sh` | the commands below |
 
@@ -38,260 +39,276 @@ The workflow itself is `.github/workflows/publish.yml`.
 
 ## Where the address is configured
 
-`deploy/site.conf`, and only there:
+In `deploy/site.conf`, and only there:
 
     DOMAIN=little.tools
     PREFIX=timetable        →  https://little.tools/timetable/
     REGION=eu-central-1     →  where the bucket lives
 
-CloudFormation takes the domain from it, `publish.py` builds the S3 key from the
-prefix, and the root page's link is substituted at publish time — so moving the
-page means editing one line. An environment variable of the same name overrides
-any of them for one command, which is how `OIDC=yes ./deploy.sh site` works.
+CloudFormation takes the domain from this file. `publish.py` builds the S3 key
+from the prefix. The link on the root page is substituted at publish time. To
+move the page, you edit one line. An environment variable of the same
+name overrides any of them for one command. That is how `OIDC=yes ./deploy.sh
+site` works.
 
-Two more are read from the environment only, since neither belongs in a file
-that describes the address:
+Four more settings are read from the environment only, because none of them
+describes the address:
 
-    ALARM_EMAIL=you@example.com where to write when a nightly build fails;
-                                unset means no alarm and no topic
+    ALARM_EMAIL=you@example.com where to write when a nightly build fails.
+                                Unset means no alarm and no topic.
     REPO=nemecec/little-tools   which repository `./deploy.sh secrets` writes to
     OIDC=yes|no                 whether this stack owns the account's GitHub
-                                OIDC provider; normally worked out on its own
-    YEAR=2026                   pin the school year the nightly build asks for;
-                                unset, it follows the calendar and rolls over
-                                in August
+                                OIDC provider. Normally worked out on its own.
+    YEAR=2026                   pin the school year the nightly build asks for.
+                                Unset, it follows the calendar and rolls over
+                                in August.
 
-**`DOMAIN` is not a thing to change afterwards.** The stack names are derived
-from it, so editing it does not move the site — it builds a second one beside
-the first and leaves the old zone billing at $0.50 a month. Take the old one
-down first; see below.
+CAUTION: Do not change `DOMAIN` after the first deploy. The stack names come
+from it, so an edit does not move the site. It builds a second site beside the
+first, and leaves the old zone billing at $0.50 a month. Take the old one down
+first. The last section of this file says how.
 
 ## Credentials
 
-The deploy needs an AWS profile with room to create CloudFormation stacks, S3
-buckets, a CloudFront distribution, a certificate, Route 53 records and an IAM
-role. Nothing here is ongoing: once it is up, publishing authenticates with a
-short-lived OIDC token and no key exists anywhere.
+The deploy needs an AWS profile with room to create CloudFormation stacks and S3
+buckets. It also creates a CloudFront distribution, a certificate, Route 53
+records and an IAM role. Nothing here is ongoing. Once the site is up,
+publishing authenticates with a short-lived OIDC token, and no key exists
+anywhere.
 
-Mirror the SSO profile pattern already in `~/.aws/config` rather than putting a
+Follow the SSO profile pattern already in `~/.aws/config`, rather than put a
 long-lived key on disk:
 
-1. In the console, open **IAM Identity Center**, enable it if it is not, and give
-   yourself a user with **AdministratorAccess** on the account.
-2. `aws configure sso --profile little-tools` — paste the portal's start URL when
-   asked, and answer `eu-central-1` for the CLI's default region. Nothing here
-   depends on it, since every call these scripts make names its own region; it
-   only decides where a bare `aws` command you type lands, and that is where the
-   bucket and both main stacks are. The exception is the certificate stack,
-   which needs `--region us-east-1` to look at.
-3. `aws sso login --profile little-tools`, then `export AWS_PROFILE=little-tools`
-   in the shell you deploy from.
+1. In the console, open **IAM Identity Center**. If it is not enabled, enable
+   it. Give yourself a user with **AdministratorAccess** on the account.
+2. Run `aws configure sso --profile little-tools`. Paste the start URL of the
+   portal when it asks. Answer `eu-central-1` for the default region of the CLI.
+3. Run `aws sso login --profile little-tools`. Then run
+   `export AWS_PROFILE=little-tools` in the shell you deploy from.
 
-An IAM user with an access key works too and is quicker, but it leaves a
-long-lived secret on the machine for something used a handful of times. Either
-way, not the root user.
+Note: nothing here depends on the default region, because every call these
+scripts make names its own region. The default region decides only where a bare
+`aws` command that you type lands. That is where the bucket and both main stacks
+are. The certificate stack is the exception, and needs `--region us-east-1`.
+
+An IAM user with an access key also works, and is quicker. But it leaves a
+long-lived secret on the machine, for something you use a handful of times.
+Either way, do not use the root user.
 
 ## Regions
 
-Nineteen resources across the three templates: sixteen in `site.yaml`, two in
-`dns.yaml` (the zone and its CAA record) and one in `cert.yaml`. Two of
-`site.yaml`'s — the alarm and the topic it writes to — exist only when an alarm
-address is given. One is pinned to a region and one
-is a choice; the rest are global or follow the bucket.
+The three templates hold nineteen resources: sixteen in `site.yaml`, two in
+`dns.yaml` (the zone and its CAA record) and one in `cert.yaml`. Two of the
+sixteen exist only when you give an alarm address. Those two are the alarm and
+the topic it writes to. One resource is pinned to a region, and one is a choice.
+The rest are global, or they follow the bucket.
 
 **The certificate must be in us-east-1.** CloudFront reads certificates from
-nowhere else, whatever region the rest of the site is in. That is why it is its
-own stack.
+nowhere else, whatever region the rest of the site is in. That is why the
+certificate is its own stack.
 
-**The bucket is the choice**, and it is in **eu-central-1**: the data is a
-European school's, and there is no reason to park a copy in Virginia. The cost
-is nothing — CloudFront pays no egress to fetch from its origin, and with a
-five-minute cache in front of one small object, a reader never waits on it.
+**The bucket is the choice**, and it is in **eu-central-1**. The data belongs to
+a European school, and there is no reason to keep a copy in Virginia. The cost
+is nothing. CloudFront pays no egress to read from its origin, and a
+five-minute cache sits in front of one small object. A reader never waits on it.
 
-Everything else — CloudFront, Route 53, IAM — is global. The region those stacks
-are deployed in only decides where the bookkeeping lives, so they sit with the
-bucket.
+Everything else is global: CloudFront, Route 53 and IAM. The region of those
+stacks decides only where the bookkeeping lives, so they sit with the bucket.
 
 ## Setting it up
 
 **1. Count visits (optional).** Register a site at
-[goatcounter.com](https://www.goatcounter.com/) and put the code in
-`site.conf`; the page is then counted at `<code>.goatcounter.com`. Leave it
-empty and no analytics script is embedded at all, and the page says nothing
+[goatcounter.com](https://www.goatcounter.com/). Put the code in `site.conf`.
+The page is then counted at `<code>.goatcounter.com`. If you leave the code
+empty, the file holds no analytics script at all, and the page says nothing
 about counting.
 
-Visits arrive one row per class — `/timetable/68/8`, titled with the school's
-own name for it. That is a label in the beacon, not the address a reader sees.
-Nothing a reader types is part of it; see the privacy note in the main README
-for why that took deliberate work.
+Note: visits arrive one row for each class, such as `/timetable/68/8`, titled
+with the school's own name for it. That is a label in the beacon, not the
+address a reader sees. Nothing a reader types is part of it. The privacy note in
+the main README says why that took deliberate work.
 
-**2. The hosted zone, and the delegation.**
+**2. Make the hosted zone, and delegate to it.**
 
     export AWS_PROFILE=little-tools
     ./deploy.sh dns
 
-It prints four nameservers. Set them for `little.tools` at Gandi, replacing the
-parking ones, then wait until `dig +short NS little.tools` answers with them.
+The command prints four nameservers. Set them for `little.tools` at Gandi, in
+place of the parking ones. Then wait until `dig +short NS little.tools` answers
+with them.
 
-This is a separate step for a reason: the certificate is validated over DNS, so
-it cannot be issued until Route 53 is actually answering for the domain. Deploy
-it all at once and CloudFormation sits waiting for a validation that can never
-succeed until you finish the registrar side.
+Note: this is a separate step for a reason. A certificate is validated over DNS,
+so ACM cannot issue one until Route 53 answers for the domain. If you deploy
+everything at once, CloudFormation waits for a validation that cannot succeed.
 
-**3. Everything else.**
+**3. Deploy everything else.**
 
     ./deploy.sh site
 
-The certificate in us-east-1, then bucket, distribution and publish role in
-`REGION`. Ten to twenty minutes, most of it CloudFront. It works out on its own
-whether the account already has a GitHub OIDC provider — there can only be one —
-and reuses it if so.
+This makes the certificate in us-east-1, then the bucket, the distribution and
+the publish role in `REGION`. It takes ten to twenty minutes, mostly CloudFront.
+The stack works out on its own whether the account already has a GitHub OIDC
+provider, and reuses it. An account can hold only one.
 
-**4. Hand the outputs to the repository**, so the button works. This sets two
-secrets — `AWS_PUBLISH_ROLE` and `AWS_BUILD_FUNCTION`. The workflow checks for
-both and stops if either is missing, so a fork of this repository can never
-authenticate against someone else's account by accident. It writes to `REPO`,
-which defaults to `nemecec/little-tools`; set it if yours is elsewhere.
+**4. Give the outputs to the repository**, so that the button works.
 
     gh auth switch --user <the account that owns the repo>
     ./deploy.sh secrets
 
-**5. Publish.** Either press *Run workflow* on the Actions tab, or do it from
-here without waiting:
+This sets two secrets: `AWS_PUBLISH_ROLE` and `AWS_BUILD_FUNCTION`. The workflow
+needs both and stops if either one is missing. A fork of this repository can
+thus never authenticate against somebody else's account by accident. The
+command writes to `REPO`, which defaults to `nemecec/little-tools`. If your
+repository is elsewhere, set `REPO`.
+
+**5. Publish.** Press *Run workflow* on the Actions tab. Or publish from here,
+without waiting:
 
     ./deploy.sh publish
 
-**6. Hear about it when the build breaks (worth doing).** EventBridge invokes
-the function asynchronously: it retries twice and then drops the failure, so
-without this nothing anywhere says the page has stopped being rebuilt.
+**6. Get told when a build breaks.** Do this one: EventBridge invokes the
+function asynchronously, retries twice, and then drops the failure. Without an
+alarm, nothing anywhere says that the page stopped being rebuilt.
 
     ALARM_EMAIL=you@example.com ./deploy.sh site
 
-That creates an SNS topic and a CloudWatch alarm on the function's `Errors`
-metric. AWS sends a confirmation mail which has to be clicked before anything
-is delivered. A night the schedule never fires is deliberately not an alarm
-here — that is a different fault from the build breaking.
+This makes an SNS topic and a CloudWatch alarm on the `Errors` metric of the
+function. AWS sends a confirmation mail. Click the link in it, or nothing is
+delivered.
+
+Note: a night when the schedule never fires is deliberately not an alarm here.
+That is a different fault from a build that breaks.
 
 ## Afterwards
 
-Publishing happens on the nightly EventBridge schedule and when you press *Run
-workflow* — never on a push. The school's server rations how often one address may ask for
-everything, and it starts timing out a caller that has just done so several
-times over; a day of ordinary commits could spend that ration before the nightly
-run gets its turn. After changing the generator, publish deliberately: the
-button, or `./deploy.sh publish` from a machine that has not been hammering the
-API. For the same reason the determinism check in `check.yml` only fetches when
-run by hand.
+Publishing happens on the nightly EventBridge schedule, and when you press *Run
+workflow*. It never happens on a push. The school's server limits how often one
+address can ask for everything. It starts to time out a caller that has just
+done so several times over. A day of ordinary commits can spend that limit
+before the nightly run gets its turn.
 
-Where the page opens and which language it starts in are environment variables
-on the build function, set by `./deploy.sh code` from `INITIAL_SCHOOL`,
-`INITIAL_CLASS` and `SITE_LANGUAGE` (defaults ProTERA, 8, et). The path, the
-domain, the region and the GoatCounter code come from `site.conf`, which travels
-in the bundle. The rest is `site.yaml`.
+After a change to the generator, publish deliberately. Use the button, or run
+`./deploy.sh publish` from a machine that has not been hammering the API. For
+the same reason, the determinism check in `check.yml` fetches only when you run
+it by hand.
 
-The schedule is `cron(20 3 * * ? *)` — 03:20 UTC. A fetch that stalls is retried
-three times, waiting 5, 20 and 60 seconds, which is enough to ride out the
+Two environment variables on the build function decide where the page opens and
+which language it starts in. `./deploy.sh code` sets them from `INITIAL_SCHOOL`,
+`INITIAL_CLASS` and `SITE_LANGUAGE`. The defaults are ProTERA, 8 and et. The
+path, the domain, the region and the GoatCounter code come from `site.conf`,
+which travels in the bundle. The rest is in `site.yaml`.
+
+The schedule is `cron(20 3 * * ? *)`, which is 03:20 UTC. A fetch that stalls is
+retried three times, after 5, 20 and 60 seconds. That is enough to ride out the
 throttling seen in practice. If it still fails, nothing is published and
-yesterday's page keeps serving.
+yesterday's page stays in service.
 
-Changing the generator does not republish anything on its own. Push it to the
+A change to the generator republishes nothing on its own. Push it to the
 function and run it:
 
     ./deploy.sh code && ./deploy.sh publish
 
-The distribution speaks **HTTP/2 and not HTTP/3**, deliberately. Advertising
-HTTP/3 sets an `alt-svc: h3` header, a browser then tries QUIC over UDP, and a
-network that carries TCP perfectly well may drop or mangle that — a corporate
-VPN being the usual culprit. The browser caches the advertisement for a day and
-keeps retrying, so the site fails intermittently with `ERR_QUIC_PROTOCOL_ERROR`
-while DNS, TCP and curl all look healthy. For one small file behind a cache
-there is nothing to win by it.
+The distribution speaks **HTTP/2 and not HTTP/3**, deliberately. An
+advertisement for HTTP/3 sets an `alt-svc: h3` header. A browser then tries QUIC
+over UDP. A network that carries TCP perfectly well can drop or mangle that.
+A corporate VPN is the usual cause. The browser caches the advertisement for a
+day and keeps retrying. So the site fails now and then with
+`ERR_QUIC_PROTOCOL_ERROR`, while DNS, TCP and curl all look healthy. For one
+small file behind a cache, HTTP/3 wins nothing.
 
-Two things cost real time to work out, and are worth knowing before touching the
-OIDC role:
+Three things cost real time to work out. Read them before you touch the OIDC
+role:
 
-- GitHub now issues subjects with immutable ids appended to both names —
-  `repo:owner@1180780/name@1343690401:ref:…` — which the trust policy everyone
-  copies never matches. Both forms are accepted.
-- Omit `ThumbprintList` and CloudFormation fills in one of its own. A token
-  signed under a different chain is then refused with nothing more useful than
+- GitHub now issues subjects with immutable ids appended to both names, as in
+  `repo:owner@1180780/name@1343690401:ref:…`. The trust policy that everybody
+  copies never matches that form. This stack accepts both forms.
+- If you omit `ThumbprintList`, CloudFormation fills in one of its own. A token
+  signed under a different chain is then refused, with nothing more useful than
   *the web identity token provided could not be validated*.
-- Whether this stack owns the account's OIDC provider is decided on the first
-  deploy and then kept. Asking again later finds the stack's own provider,
+- The first deploy decides whether this stack owns the account's OIDC provider,
+  and then keeps the answer. A second look finds the stack's own provider,
   answers "no", and the next update deletes the thing it was asked about. If the
-  answer ever needs correcting: `OIDC=yes ./deploy.sh site`.
+  answer ever needs a correction, run `OIDC=yes ./deploy.sh site`.
 
 ## Cost
 
-Storage and requests are rounding errors: about 600 KB on the shelf and 75 KB
-over the wire per reader once compressed, and a few seconds of Lambda a night. CloudFront's free tier should cover the traffic
-outright; past it, ten thousand visits a month is a few cents.
+Storage and requests are rounding errors. The page is about 600 KB on the shelf,
+and 75 KB over the wire for each reader once compressed. The nightly build takes
+a few seconds of Lambda.
+The free tier of CloudFront covers the traffic outright. Past the free tier, ten
+thousand visits a month is a few cents.
 
 The real line item is the **Route 53 hosted zone at $0.50/month**. The
-certificate is free. Confirm the current free-tier terms rather than taking this
-paragraph's word for it.
+certificate is free. Check the current free-tier terms yourself, rather than
+take this paragraph at its word.
 
 ## Before it is public
 
-The page republishes TERA's timetable — every class, teachers' full names, rooms
-— under your domain. All of it is already publicly readable on
-`tera.edupage.org`, which is where it is fetched from, anonymously and without a
-login. So nothing new is exposed. But an aggregated copy on someone else's domain
-can read as official, and it goes stale silently if the build stops.
+The page republishes TERA's timetable under your domain: every class, the full
+names of teachers, and the rooms. All of it is already public on
+`tera.edupage.org`, which is where the script reads it from, anonymously and
+without a login. Nothing new is exposed.
 
-The page says it is unofficial under its heading, beside a link to the school's
-own page for whichever timetable is shown and the date the data was read. A
-printed sheet carries the date and a QR code back to the page rather than the
-whole notice — worth knowing if sheets are what circulate. Telling the school
-before you publish is still worth the five minutes.
+But an aggregated copy on somebody else's domain can read as official. It also
+goes stale in silence if the build stops.
+
+The page says that it is unofficial, under its heading, beside a link to the
+school's own page and the date the data was read. A printed sheet carries the
+date and a QR code back to the page, rather than the whole notice. That is worth
+knowing if sheets are what circulate. Tell the school before you publish. It
+takes five minutes.
 
 ## When it goes wrong
 
 **The site loads from a terminal but not in a browser.** Every command-line
-check speaks HTTP/1.1 or HTTP/2, and a browser may be trying HTTP/3 — so `curl`,
-`dig` and `openssl` can all pass while Chrome shows `ERR_QUIC_PROTOCOL_ERROR`.
-That is why the distribution is set to `HttpVersion: http2`: it stops CloudFront
-advertising `alt-svc: h3` on a network where QUIC does not survive. If it comes
-back, check the response headers for `alt-svc` before looking anywhere else.
+check speaks HTTP/1.1 or HTTP/2, and a browser can be trying HTTP/3. So `curl`,
+`dig` and `openssl` all pass while Chrome shows `ERR_QUIC_PROTOCOL_ERROR`. That
+is why the distribution is set to `HttpVersion: http2`. The setting stops
+CloudFront advertising `alt-svc: h3` on a network where QUIC does not survive.
+If the fault comes back, look at the response headers for `alt-svc` first.
 
 **The address resolves to the wrong place after a change.** macOS keeps its own
-resolver cache that `dig` goes around, so the two can disagree for a while.
-`sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder`, then try the
-browser again — and give it a minute, because Chrome caches separately too.
+resolver cache. `dig` goes around that cache, so the two disagree for a while.
+Run
+`sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder`. Then try the
+browser again, and give it a minute, because Chrome caches separately too.
 
 **`./deploy.sh site` says the OIDC provider is not authorized, cannot be
 validated, or already exists.** An account holds exactly one GitHub OIDC
-provider and the stack works out on its own whether it is the owner. If that
-answer is wrong — usually because a provider was created or deleted elsewhere —
-say so once: `OIDC=yes ./deploy.sh site` to take ownership, `OIDC=no` to leave
-it alone. Do not let CloudFormation fill in a thumbprint by itself; `site.yaml`
-pins one deliberately.
+provider. The stack works out on its own whether it is the owner. If that
+answer is wrong, usually because somebody created or deleted a provider
+elsewhere, say so once. Run `OIDC=yes ./deploy.sh site` to take ownership, or
+`OIDC=no` to leave it alone. Do not let CloudFormation fill in a thumbprint by
+itself. `site.yaml` pins one deliberately.
 
-**The nightly run publishes nothing.** Two reasons are normal: the timetable did
-not change (the generator is deterministic, so the page is byte-identical), or a
-school failed to fetch and the run refused to replace a full page with a
-smaller one. The second is a hard error and the log names the counts. Once the
-cause is understood, `PUBLISH_ANYWAY=1 ./deploy.sh publish` overrides it.
+**The nightly run publishes nothing.** Two reasons are normal. Either the
+timetable did not change, and the page is byte-identical because the generator
+is deterministic. Or a school failed to fetch, and the run refused to replace a
+full page with a smaller one. The second reason is a hard error, and the log
+names the counts. Once you know the cause, `PUBLISH_ANYWAY=1 ./deploy.sh
+publish` overrides it.
 
 **A build fails with something about JSON.** EduPage answers a lapsed session
-with a login page and HTTP 200. The error quotes what came back; there is
-nothing to fix locally, so try again.
+with a login page and HTTP 200. The error quotes what came back. There is
+nothing to fix locally, so run it again.
 
 ## Taking it down
 
     aws --region eu-central-1 cloudformation delete-stack --stack-name little-tools-site
     aws --region us-east-1    cloudformation delete-stack --stack-name little-tools-cert
 
-`delete-stack` returns straight away and the work carries on behind it. Wait for
-each before starting the next, or the certificate deletion fails while the
+`delete-stack` returns at once and the work carries on behind it. Wait for each
+stack before you start the next one, or the certificate deletion fails while the
 distribution still holds it:
 
     aws --region eu-central-1 cloudformation wait stack-delete-complete --stack-name little-tools-site
     aws --region us-east-1    cloudformation wait stack-delete-complete --stack-name little-tools-cert
 
-The site stack takes fifteen minutes or so — CloudFront again. The bucket is
-versioned, so empty it first if CloudFormation refuses. Deleting
-the site stack also removes the publish role, which is the whole of what the
-repository can reach — revoking it needs nothing done on the GitHub side. The DNS
-stack can stay; deleting it releases the nameservers, which means pointing the
-registrar somewhere else again if you ever come back.
+The site stack takes about fifteen minutes, CloudFront again. The bucket is
+versioned. If CloudFormation refuses to delete it, empty it first.
+
+Deletion of the site stack also removes the publish role, which is the whole of
+what the repository can reach. Revoking it needs nothing on the GitHub side.
+
+The DNS stack can stay. Deletion of it releases the nameservers, so you have to
+point the registrar somewhere else again if you ever come back.

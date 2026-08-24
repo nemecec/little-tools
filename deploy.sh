@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Set up the AWS side of little.tools. The nightly rebuild runs in AWS, from
-# EventBridge into a Lambda; this puts that, and everything it publishes into,
-# in place. The repository's workflow only asks the Lambda to run early.
+# EventBridge into a Lambda. This puts that in place, and everything it
+# publishes into. The repository's workflow only asks the Lambda to run early.
 #
 #   ./deploy.sh dns       once, first: the hosted zone, and the nameservers to
 #                         set at the registrar
@@ -12,14 +12,14 @@
 #
 # The bucket and the stacks live in REGION from site.conf. The certificate is
 # its own stack in us-east-1, because CloudFront reads certificates from nowhere
-# else; everything else here — CloudFront, Route 53, IAM — is global anyway.
+# else. Everything else here — CloudFront, Route 53, IAM — is global anyway.
 
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 
-# site.conf is the one place the address is written down; the environment wins
-# over it, for trying something out without editing the file.
+# site.conf is the one place the address is written down. The environment wins
+# over it, so you can try something out without an edit to the file.
 from_env_domain="${DOMAIN:-}" from_env_prefix="${PREFIX:-}" from_env_region="${REGION:-}"
 from_env_gc="${GOATCOUNTER:-}" from_env_alarm="${ALARM_EMAIL:-}"
 # shellcheck source=site.conf
@@ -31,7 +31,7 @@ GOATCOUNTER="${from_env_gc:-${GOATCOUNTER:-}}"
 ALARM_EMAIL="${from_env_alarm:-${ALARM_EMAIL:-}}"   # a failed build writes here
 
 REPO="${REPO:-nemecec/little-tools}"
-CERT_REGION="us-east-1"          # not a preference; CloudFront allows no other
+CERT_REGION="us-east-1"          # not a preference. CloudFront allows no other
 DNS_STACK="${DOMAIN//./-}-dns"
 CERT_STACK="${DOMAIN//./-}-cert"
 SITE_STACK="${DOMAIN//./-}-site"
@@ -44,10 +44,10 @@ output() {  # stack, key, [region]
     --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text
 }
 
-# "The stack is not there" and "I could not ask" are different answers, and the
+# "The stack is not there" and "I cannot ask" are different answers, and the
 # guards below act on the first. Conflating them turned an expired SSO token
-# into "run ./deploy.sh dns first" — advice that would build a second hosted
-# zone beside the one already serving the site.
+# into "run ./deploy.sh dns first". That advice builds a second hosted zone beside the
+# one already serving the site.
 maybe_output() {  # stack, key, [region] — empty if absent, exits if unreachable
   local out status
   out="$(output "$1" "$2" "${3:-}" 2>&1)"; status=$?
@@ -89,7 +89,7 @@ site)
 
   # An account holds one GitHub OIDC provider. Whether this stack owns it is
   # decided once, on the first deploy, and then kept: asking the question again
-  # later would find the stack's own provider, answer "no", and make the next
+  # later finds the stack's own provider, answers "no", and makes the next
   # update delete the very thing it was asked about.
   # OIDC=yes|no overrides, for putting it right if it was ever answered wrongly.
   oidc="${OIDC:-}"
@@ -151,8 +151,8 @@ code)
   ;;
 
 secrets)
-  # gh keeps several accounts and only one is active; the wrong one gets a 403
-  # here that reads like a permissions bug rather than a wrong-hat bug.
+  # gh keeps several accounts and only one is active. The wrong one gets a 403
+  # here, which reads like a permissions bug rather than a wrong-hat bug.
   if ! gh api "repos/$REPO" --jq .permissions.push 2>/dev/null | grep -q true; then
     echo "the active gh account cannot write to $REPO." >&2
     echo "  gh auth status          # see which accounts are logged in" >&2

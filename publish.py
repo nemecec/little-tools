@@ -6,7 +6,8 @@ beyond what `tt.py` already needs: nothing.
 
     BUCKET=... DISTRIBUTION=... python3 deploy/publish.py
 
-The address it publishes to comes from site.conf; the environment overrides it.
+The address it publishes to comes from site.conf. The environment overrides
+it.
 """
 
 import datetime
@@ -19,7 +20,7 @@ import sys
 import tempfile
 import uuid
 
-# Run from a checkout, tt.py is one directory up; run from the Lambda bundle,
+# Run from a checkout, tt.py is one directory up. Run from the Lambda bundle,
 # it sits alongside. Both are on the path so neither layout is special.
 _here = pathlib.Path(__file__).resolve().parent
 for candidate in (_here.parent, _here):
@@ -53,7 +54,7 @@ INITIAL_SCHOOL = os.environ.get("INITIAL_SCHOOL", "")
 INITIAL_CLASS = os.environ.get("INITIAL_CLASS", "")
 LANGUAGE = os.environ.get("SITE_LANGUAGE", "en")
 REGION = os.environ.get("AWS_REGION") or configured("REGION", "eu-central-1")
-CLOUDFRONT_REGION = "us-east-1"   # global service; the CLI wants a region anyway
+CLOUDFRONT_REGION = "us-east-1"   # a global service, but the CLI wants a region
 
 HTML = "text/html; charset=utf-8"
 CACHE = "public, max-age=300"
@@ -107,8 +108,8 @@ class ThroughBoto:
         except self.s3.exceptions.ClientError as exc:
             # The role holds s3:ListBucket, so a missing key answers 404 and
             # only a missing key does. A 403 here is a broken policy, and
-            # treating it as "nothing published yet" would turn off the guard
-            # below at exactly the moment it is needed.
+            # "nothing published yet" turns off the guard below at exactly the
+            # moment it is needed.
             if exc.response["Error"]["Code"] in ("NoSuchKey", "404"):
                 return None
             raise
@@ -120,7 +121,7 @@ class ThroughBoto:
     def invalidate(self, paths):
         # The reference must differ every time. Reuse it and CloudFront hands
         # back the first invalidation instead of making a new one, so every
-        # night after the first would quietly do nothing.
+        # night after the first then does nothing at all.
         self.cloudfront.create_invalidation(
             DistributionId=DISTRIBUTION,
             InvalidationBatch={"Paths": {"Quantity": len(paths), "Items": list(paths)},
@@ -148,9 +149,10 @@ def published(key):
 def timetables_in(page):
     """How many schools a published page carries, or None if it cannot be told.
 
-    Read out of the page's own data blob rather than guessed from the markup:
-    the keys are shortened on the way in — `ttNum` is written `n` — so counting
-    a long name finds nothing and silently answers "no schools live".
+    Read out of the page's own data blob rather than guessed from the
+    markup. The keys are shortened on the way in, and `ttNum` is written `n`.
+    So a count of a long name finds nothing, and answers "no schools live"
+    without a word.
     """
     found = re.search(rb'<script id="data" type="application/json">(.*?)</script>',
                       page, re.S)
@@ -199,7 +201,7 @@ def main():
     # A timetable that errors upstream is skipped with a warning rather than
     # failing the build, which is right for one class going missing and wrong
     # for a whole school. Refuse to replace a page with a smaller one unless
-    # told to; the previous page keeps serving and the run is visibly red.
+    # told to. The previous page keeps serving, and the run is visibly red.
     if current is not None and not os.environ.get("PUBLISH_ANYWAY"):
         was = timetables_in(current)
         if was is not None and schools < was:
