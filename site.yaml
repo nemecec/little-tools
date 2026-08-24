@@ -367,12 +367,17 @@ Resources:
         - Name: FunctionName
           Value: !Ref BuildFunction
       Statistic: Sum
-      Period: 86400
+      # An hour, not a day. The build runs once a night, so the point of this is
+      # to say so within the hour rather than whenever the day's bucket happens
+      # to close — a day-long period is slow to notice and just as slow to
+      # clear, which leaves it sitting in ALARM long after the cause is gone.
+      Period: 3600
       EvaluationPeriods: 1
       Threshold: 0
       ComparisonOperator: GreaterThanThreshold
-      # A night with no invocation at all is not a failure to report here; the
-      # schedule not firing is a different problem from the build breaking.
+      # The 23 hours a day it is not running are not failures. Nor is a night
+      # the schedule never fired: that is a different fault from the build
+      # breaking, and this alarm does not claim to catch it.
       TreatMissingData: notBreaching
       AlarmActions: [!Ref BuildAlarmTopic]
 
