@@ -97,10 +97,10 @@ Either way, do not use the root user.
 
 ## Regions
 
-The three templates hold twenty-six resources: twenty-three in `site.yaml`, two
+The three templates hold twenty-nine resources: twenty-six in `site.yaml`, two
 in `dns.yaml` (the zone and its CAA record) and one in `cert.yaml`. Some of the
-twenty-three exist only on a condition. Two need an alarm address: the alarm and
-the topic it writes to. Six more are the fault reporter, and one of those needs
+twenty-six exist only on a condition. Two need an alarm address: the alarm and
+the topic it writes to. Nine more are the fault reporter, and one of those needs
 the alarm address as well. One resource is pinned to a region, and one is a
 choice. The rest are global, or they follow the bucket.
 

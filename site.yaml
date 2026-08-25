@@ -233,14 +233,11 @@ Resources:
               S3OriginConfig:
                 OriginAccessIdentity: ""
             - Id: report
-              # A function URL is https://<id>.lambda-url.<region>.on.aws/ and
-              # an origin wants the host out of it.
-              DomainName: !Select [2, !Split ["/", !GetAtt ReportUrl.FunctionUrl]]
+              DomainName: !Sub "${ReportApi}.execute-api.${AWS::Region}.amazonaws.com"
               CustomOriginConfig:
                 OriginProtocolPolicy: https-only
                 OriginSSLProtocols: [TLSv1.2]
-              # What tells the function the call came through CloudFront. The
-              # URL is open to the world without it.
+              # What tells the function the call came through CloudFront.
               OriginCustomHeaders:
                 - HeaderName: x-report-gate
                   HeaderValue: !Select [2, !Split ["/", !Ref AWS::StackId]]
@@ -251,7 +248,7 @@ Resources:
                 OriginAccessIdentity: ""
         CacheBehaviors: !If
           - Reporting
-          - - PathPattern: /report
+          - - PathPattern: report
               TargetOriginId: report
               ViewerProtocolPolicy: https-only
               # POST is the one that matters. CloudFront will not allow it on
@@ -439,9 +436,16 @@ Resources:
   # policy that lets the page reach nothing at all still lets it reach here,
   # and no third party is handed the reader's data.
   #
-  # The function URL is public, because CloudFront needs some address to call.
-  # A header CloudFront alone adds keeps everybody else out. That is a gate on
-  # noise, not a secret worth guarding: the worst a leak buys is a log line.
+  # The way in is an HTTP API, and it took two tries to learn why. A Lambda
+  # function URL is the smaller thing and was the first choice. It cannot be
+  # reached without authentication here — this account is in an organization
+  # that forbids that — and CloudFront cannot supply the authentication either,
+  # because its signature does not cover a request body, which is the whole
+  # payload. An HTTP API has neither limit.
+  #
+  # The API is reachable by anyone who finds it, so a header CloudFront alone
+  # adds is what the function answers to. That is a gate on noise, not a secret
+  # worth guarding: the worst a leak buys is a log line.
   #
   # The reader's own words never arrive. The page replaces them with their
   # length before it sends. See scrubbed() in page.js.
@@ -515,21 +519,49 @@ Resources:
               print(json.dumps(report, ensure_ascii=False, sort_keys=True)[:CAP])
               return {"statusCode": 204}
 
-  ReportUrl:
-    Type: AWS::Lambda::Url
+  ReportApi:
+    Type: AWS::ApiGatewayV2::Api
     Condition: Reporting
     Properties:
-      TargetFunctionArn: !GetAtt ReportFunction.Arn
-      AuthType: NONE
+      Name: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "report"]]
+      ProtocolType: HTTP
+
+  ReportIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Condition: Reporting
+    Properties:
+      ApiId: !Ref ReportApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ReportFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  ReportRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Condition: Reporting
+    Properties:
+      ApiId: !Ref ReportApi
+      # One route, one method. Everything else the API answers 404 itself.
+      RouteKey: POST /report
+      Target: !Join ["/", ["integrations", !Ref ReportIntegration]]
+
+  # $default, so the address carries no stage name and CloudFront can pass the
+  # path through unchanged.
+  ReportStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Condition: Reporting
+    Properties:
+      ApiId: !Ref ReportApi
+      StageName: $default
+      AutoDeploy: true
 
   ReportPermission:
     Type: AWS::Lambda::Permission
     Condition: Reporting
     Properties:
       FunctionName: !GetAtt ReportFunction.Arn
-      Action: lambda:InvokeFunctionUrl
-      Principal: "*"
-      FunctionUrlAuthType: NONE
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ReportApi}/*/POST/report"
 
   # What turns a log line into a mail. The alarm needs somewhere to write, so
   # it exists only when an address was given.
