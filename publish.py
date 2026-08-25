@@ -48,6 +48,10 @@ BUCKET = os.environ["BUCKET"]
 DISTRIBUTION = os.environ["DISTRIBUTION"]
 PREFIX = configured("PREFIX").strip("/")
 GOATCOUNTER = configured("GOATCOUNTER")
+# Where the page posts a fault it could not survive. Same origin, so the policy
+# that lets the page reach nothing at all still lets it reach this. One switch
+# with the stack, so the page cannot post to a path nothing answers.
+REPORT_PATH = "/report" if configured("REPORT_ERRORS", "yes") == "yes" else ""
 EDUPAGE = os.environ.get("EDUPAGE", "tera")
 YEAR = int(configured("YEAR", str(tt.school_year())))
 INITIAL_SCHOOL = os.environ.get("INITIAL_SCHOOL", "")
@@ -136,7 +140,8 @@ def build():
     schools = tt.collect(client, YEAR, None, False)
     school, klass = tt.pick_initial(schools, INITIAL_SCHOOL or None, INITIAL_CLASS or None)
     page = tt.render_html(schools, EDUPAGE, YEAR, school, klass, LANGUAGE,
-                          built=datetime.date.today().isoformat(), goatcounter=GOATCOUNTER)
+                          built=datetime.date.today().isoformat(), goatcounter=GOATCOUNTER,
+                          report_path=REPORT_PATH)
     slots = sum(len(c["entries"]) for s in schools for c in s["classes"])
     return page.encode("utf-8"), len(schools), slots
 

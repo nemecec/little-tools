@@ -22,6 +22,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 # over it, so you can try something out without an edit to the file.
 from_env_domain="${DOMAIN:-}" from_env_prefix="${PREFIX:-}" from_env_region="${REGION:-}"
 from_env_gc="${GOATCOUNTER:-}" from_env_alarm="${ALARM_EMAIL:-}"
+from_env_reports="${REPORT_ERRORS:-}"
 # shellcheck source=site.conf
 . "$here/site.conf"
 DOMAIN="${from_env_domain:-$DOMAIN}"
@@ -29,6 +30,7 @@ PREFIX="${from_env_prefix:-$PREFIX}"
 REGION="${from_env_region:-$REGION}"
 GOATCOUNTER="${from_env_gc:-${GOATCOUNTER:-}}"
 ALARM_EMAIL="${from_env_alarm:-${ALARM_EMAIL:-}}"   # a failed build writes here
+REPORT_ERRORS="${from_env_reports:-${REPORT_ERRORS:-yes}}"
 
 REPO="${REPO:-nemecec/little-tools}"
 CERT_REGION="us-east-1"          # not a preference. CloudFront allows no other
@@ -92,6 +94,21 @@ site)
   # later finds the stack's own provider, answers "no", and makes the next
   # update delete the very thing it was asked about.
   # OIDC=yes|no overrides, for putting it right if it was ever answered wrongly.
+  # The alarm address is the same shape of question, and it bit: an address
+  # given once on the command line lives only in the stack, so the next deploy
+  # without it in the environment passed an empty string and deleted the alarm
+  # and its topic. Nothing failed. The site simply stopped being watched.
+  # ALARM_EMAIL= (empty, explicitly) still turns it off.
+  if [ -z "${from_env_alarm:-}" ] && [ -z "${ALARM_EMAIL:-}" ]; then
+    deployed="$(aws cloudformation describe-stacks --stack-name "$SITE_STACK" \
+      --query "Stacks[0].Parameters[?ParameterKey=='AlarmEmail'].ParameterValue" \
+      --output text 2>/dev/null || true)"
+    if [ -n "$deployed" ] && [ "$deployed" != "None" ]; then
+      ALARM_EMAIL="$deployed"
+      echo "keeping the alarm address already deployed"
+    fi
+  fi
+
   oidc="${OIDC:-}"
   [ -n "$oidc" ] || oidc="$(aws cloudformation describe-stacks --stack-name "$SITE_STACK" \
     --query "Stacks[0].Parameters[?ParameterKey=='CreateOidcProvider'].ParameterValue" \
@@ -113,7 +130,8 @@ site)
     --parameter-overrides \
       "DomainName=$DOMAIN" "HostedZoneId=$zone" "CertificateArn=$cert" \
       "GitHubRepo=$REPO" "CreateOidcProvider=$oidc" \
-      "CounterSite=${GOATCOUNTER:-}" "AlarmEmail=${ALARM_EMAIL:-}"
+      "CounterSite=${GOATCOUNTER:-}" "AlarmEmail=${ALARM_EMAIL:-}" \
+      "ReportErrors=${REPORT_ERRORS:-yes}"
   "$here/deploy.sh" code
   echo
   echo "Live at $(output "$SITE_STACK" SiteUrl) once something has been published."

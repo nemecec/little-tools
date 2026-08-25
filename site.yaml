@@ -44,6 +44,15 @@ Parameters:
       is then allowed to be reached; goatcounter.com hands anyone a subdomain,
       so a wildcard would leave a ready-made place to send data to. Empty
       forbids the host outright.
+  ReportErrors:
+    Type: String
+    Default: "yes"
+    AllowedValues: ["yes", "no"]
+    Description: >
+      Whether the page may report its own faults. A fault otherwise leaves a
+      half-drawn page and nobody hears about it. The report carries the error,
+      the browser and the settings with every typed word replaced by its
+      length. It goes to this account's own logs, not to anybody else's.
   Schedule:
     Type: String
     Default: cron(20 3 * * ? *)
@@ -63,6 +72,8 @@ Conditions:
   MakeOidcProvider: !Equals [!Ref CreateOidcProvider, "yes"]
   Counting: !Not [!Equals [!Ref CounterSite, ""]]
   Alarming: !Not [!Equals [!Ref AlarmEmail, ""]]
+  Reporting: !Equals [!Ref ReportErrors, "yes"]
+  ReportingAlarm: !And [!Condition Reporting, !Condition Alarming]
 
 Resources:
 
@@ -165,11 +176,17 @@ Resources:
                 script-src 'unsafe-inline' ${Counter};
                 style-src 'unsafe-inline';
                 img-src 'self' data: ${Beacon};
-                connect-src ${Beacon};
+                connect-src ${Connect};
                 form-action 'none';
                 frame-ancestors 'none';
                 base-uri 'none'
               - Counter: !If [Counting, "https://gc.zgo.at", "'none'"]
+                # The page posts a fault to its own origin. 'self' is added
+                # only when there is something there to post to.
+                Connect: !If
+                  - Reporting
+                  - !If [Counting, !Sub "'self' https://${CounterSite}.goatcounter.com", "'self'"]
+                  - !If [Counting, !Sub "https://${CounterSite}.goatcounter.com", "'none'"]
                 Beacon: !If
                   - Counting
                   - !Sub "https://${CounterSite}.goatcounter.com"
@@ -206,12 +223,45 @@ Resources:
         HttpVersion: http2
         IPV6Enabled: true
         PriceClass: PriceClass_100
-        Origins:
-          - Id: s3
-            DomainName: !GetAtt Bucket.RegionalDomainName
-            OriginAccessControlId: !GetAtt OriginAccessControl.Id
-            S3OriginConfig:
-              OriginAccessIdentity: ""
+        # The report origin is listed whole rather than appended, because a
+        # list cannot hold a condition. Both entries move together.
+        Origins: !If
+          - Reporting
+          - - Id: s3
+              DomainName: !GetAtt Bucket.RegionalDomainName
+              OriginAccessControlId: !GetAtt OriginAccessControl.Id
+              S3OriginConfig:
+                OriginAccessIdentity: ""
+            - Id: report
+              # A function URL is https://<id>.lambda-url.<region>.on.aws/ and
+              # an origin wants the host out of it.
+              DomainName: !Select [2, !Split ["/", !GetAtt ReportUrl.FunctionUrl]]
+              CustomOriginConfig:
+                OriginProtocolPolicy: https-only
+                OriginSSLProtocols: [TLSv1.2]
+              # What tells the function the call came through CloudFront. The
+              # URL is open to the world without it.
+              OriginCustomHeaders:
+                - HeaderName: x-report-gate
+                  HeaderValue: !Select [2, !Split ["/", !Ref AWS::StackId]]
+          - - Id: s3
+              DomainName: !GetAtt Bucket.RegionalDomainName
+              OriginAccessControlId: !GetAtt OriginAccessControl.Id
+              S3OriginConfig:
+                OriginAccessIdentity: ""
+        CacheBehaviors: !If
+          - Reporting
+          - - PathPattern: /report
+              TargetOriginId: report
+              ViewerProtocolPolicy: https-only
+              # POST is the one that matters. CloudFront will not allow it on
+              # its own, so the whole write set comes with it.
+              AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+              CachedMethods: [GET, HEAD]
+              # CachingDisabled and AllViewerExceptHostHeader, both AWS managed.
+              CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+              OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+          - !Ref AWS::NoValue
         DefaultCacheBehavior:
           TargetOriginId: s3
           ViewerProtocolPolicy: redirect-to-https
@@ -378,6 +428,141 @@ Resources:
       # The 23 hours a day it is not running are not failures. Nor is a night
       # the schedule never fired: that is a different fault from the build
       # breaking, and this alarm does not claim to catch it.
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref BuildAlarmTopic]
+
+  # ----------------------------------------------------------------- faults --
+  #
+  # The page tells this endpoint when it breaks. Three things shape it.
+  #
+  # It is same-origin: CloudFront serves /report from this function, so the
+  # policy that lets the page reach nothing at all still lets it reach here,
+  # and no third party is handed the reader's data.
+  #
+  # The function URL is public, because CloudFront needs some address to call.
+  # A header CloudFront alone adds keeps everybody else out. That is a gate on
+  # noise, not a secret worth guarding: the worst a leak buys is a log line.
+  #
+  # The reader's own words never arrive. The page replaces them with their
+  # length before it sends. See scrubbed() in page.js.
+  ReportLogs:
+    Type: AWS::Logs::LogGroup
+    Condition: Reporting
+    Properties:
+      LogGroupName: !Join ["", ["/aws/lambda/", !Join ["-", !Split [".", !Ref DomainName]], "-report"]]
+      # A fault is worth reading while it is still happening, and worth nothing
+      # a fortnight later. Short retention also caps what a flood can cost.
+      RetentionInDays: 14
+
+  ReportRole:
+    Type: AWS::IAM::Role
+    Condition: Reporting
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-its-own-log
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt ReportLogs.Arn
+      # Nothing else. It writes a line and returns: no bucket, no distribution,
+      # no way to reach anything this account holds.
+
+  ReportFunction:
+    Type: AWS::Lambda::Function
+    Condition: Reporting
+    DependsOn: ReportLogs
+    Properties:
+      FunctionName: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "report"]]
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !GetAtt ReportRole.Arn
+      Timeout: 5
+      MemorySize: 128
+      # One at a time. A page in a repaint loop, or somebody who finds the
+      # address, then costs a queue rather than a bill.
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          GATE: !Select [2, !Split ["/", !Ref AWS::StackId]]
+      Code:
+        ZipFile: |
+          import json, os
+
+          GATE = os.environ["GATE"]
+          CAP = 8000     # a report is a few hundred bytes; this is the ceiling
+
+          def handler(event, _context):
+              headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+              if headers.get("x-report-gate") != GATE:
+                  return {"statusCode": 403}
+              body = (event.get("body") or "")[:CAP]
+              try:
+                  report = json.loads(body)
+              except ValueError:
+                  return {"statusCode": 400}
+              if not isinstance(report, dict) or report.get("kind") != "page-error":
+                  return {"statusCode": 400}
+              # One line, so a metric filter can count it and a human can read
+              # it. The page decides what is in it; nothing is added here.
+              print(json.dumps(report, ensure_ascii=False, sort_keys=True)[:CAP])
+              return {"statusCode": 204}
+
+  ReportUrl:
+    Type: AWS::Lambda::Url
+    Condition: Reporting
+    Properties:
+      TargetFunctionArn: !GetAtt ReportFunction.Arn
+      AuthType: NONE
+
+  ReportPermission:
+    Type: AWS::Lambda::Permission
+    Condition: Reporting
+    Properties:
+      FunctionName: !GetAtt ReportFunction.Arn
+      Action: lambda:InvokeFunctionUrl
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+
+  # What turns a log line into a mail. The alarm needs somewhere to write, so
+  # it exists only when an address was given.
+  ReportSeen:
+    Type: AWS::Logs::MetricFilter
+    Condition: Reporting
+    Properties:
+      LogGroupName: !Ref ReportLogs
+      FilterPattern: '{ $.kind = "page-error" }'
+      MetricTransformations:
+        - MetricNamespace: !Join ["-", !Split [".", !Ref DomainName]]
+          MetricName: PageErrors
+          MetricValue: "1"
+          DefaultValue: 0
+
+  PageBroke:
+    Type: AWS::CloudWatch::Alarm
+    Condition: ReportingAlarm
+    Properties:
+      AlarmName: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "page-broke"]]
+      AlarmDescription: >-
+        The page reported a fault in a reader's browser. The site is up; the
+        page is not doing what it should once it gets there. Read the report in
+        the -report log group.
+      Namespace: !Join ["-", !Split [".", !Ref DomainName]]
+      MetricName: PageErrors
+      Statistic: Sum
+      # An hour. One reader hitting one fault five times is one mail, and a
+      # fault nobody hit costs nothing.
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
       AlarmActions: [!Ref BuildAlarmTopic]
 
