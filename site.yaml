@@ -512,7 +512,8 @@ Resources:
                   report = json.loads(body)
               except ValueError:
                   return {"statusCode": 400}
-              if not isinstance(report, dict) or report.get("kind") != "page-error":
+              if not isinstance(report, dict) or \
+                      report.get("kind") not in ("page-error", "feedback"):
                   return {"statusCode": 400}
               # One line, so a metric filter can count it and a human can read
               # it. The page decides what is in it; nothing is added here.
@@ -576,6 +577,38 @@ Resources:
           MetricName: PageErrors
           MetricValue: "1"
           DefaultValue: 0
+
+  # Somebody took the trouble to write. It should not sit in a log group
+  # nobody opens.
+  SaidSomething:
+    Type: AWS::Logs::MetricFilter
+    Condition: Reporting
+    Properties:
+      LogGroupName: !Ref ReportLogs
+      FilterPattern: '{ $.kind = "feedback" }'
+      MetricTransformations:
+        - MetricNamespace: !Join ["-", !Split [".", !Ref DomainName]]
+          MetricName: Feedback
+          MetricValue: "1"
+          DefaultValue: 0
+
+  SomebodyWrote:
+    Type: AWS::CloudWatch::Alarm
+    Condition: ReportingAlarm
+    Properties:
+      AlarmName: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "feedback"]]
+      AlarmDescription: >-
+        A reader sent feedback from the page. Nothing is broken. Read it in the
+        -report log group.
+      Namespace: !Join ["-", !Split [".", !Ref DomainName]]
+      MetricName: Feedback
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref BuildAlarmTopic]
 
   PageBroke:
     Type: AWS::CloudWatch::Alarm
