@@ -571,7 +571,10 @@ Resources:
     Condition: Reporting
     Properties:
       LogGroupName: !Ref ReportLogs
-      FilterPattern: '{ $.kind = "page-error" }'
+      # Not the opaque ones. A browser that will not say what happened in a
+      # script from another origin gives "Script error." and nothing else,
+      # which is a log line rather than something to be woken for.
+      FilterPattern: '{ $.kind = "page-error" && $.opaque NOT EXISTS }'
       MetricTransformations:
         - MetricNamespace: !Join ["-", !Split [".", !Ref DomainName]]
           MetricName: PageErrors
