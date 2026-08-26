@@ -97,11 +97,12 @@ Either way, do not use the root user.
 
 ## Regions
 
-The three templates hold thirty-one resources: twenty-eight in `site.yaml`, two
-in `dns.yaml` (the zone and its CAA record) and one in `cert.yaml`. Some of the
-twenty-eight exist only on a condition. Two need an alarm address: the alarm and
-the topic it writes to. Eleven more are the endpoint the page reports faults and
-feedback to, and two of those need the alarm address as well. One resource is pinned to a region, and one is a
+The three templates hold thirty-three resources: thirty in `site.yaml`, two in
+`dns.yaml` (the zone and its CAA record) and one in `cert.yaml`. Some of the
+thirty exist only on a condition. Four need an alarm address: two alarms and the
+topic they write to, plus the filter that notices a stale day plan. Eleven more
+are the endpoint the page reports faults and feedback to, and two of those need
+the alarm address as well. One resource is pinned to a region, and one is a
 choice. The rest are global, or they follow the bucket.
 
 **The certificate must be in us-east-1.** CloudFront reads certificates from

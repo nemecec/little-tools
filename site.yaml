@@ -428,6 +428,42 @@ Resources:
       TreatMissingData: notBreaching
       AlarmActions: [!Ref BuildAlarmTopic]
 
+  # A hand-copied day plan goes stale when the school republishes, and the
+  # first sign is a lesson landing where the plan has no slot for it. The
+  # build says so; this is what makes anybody hear it.
+  PlanDrifted:
+    Type: AWS::Logs::MetricFilter
+    Condition: Alarming
+    Properties:
+      LogGroupName: !Ref BuildLogs
+      FilterPattern: '"the day plan has no time for"'
+      MetricTransformations:
+        - MetricNamespace: !Join ["-", !Split [".", !Ref DomainName]]
+          MetricName: PlanDrift
+          MetricValue: "1"
+          DefaultValue: 0
+
+  PlanOutOfDate:
+    Type: AWS::CloudWatch::Alarm
+    Condition: Alarming
+    Properties:
+      AlarmName: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "plan-drift"]]
+      AlarmDescription: >-
+        A lesson landed where the school's day plan has no slot for it. The
+        plan in tt.py is copied from a published sheet, so this is what a
+        republished sheet looks like from here. Read the build log.
+      Namespace: !Join ["-", !Split [".", !Ref DomainName]]
+      MetricName: PlanDrift
+      Statistic: Sum
+      # A day. The build runs once a night, and this is not urgent — it is a
+      # timetable that has moved on, not a site that is down.
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref BuildAlarmTopic]
+
   # ----------------------------------------------------------------- faults --
   #
   # The page tells this endpoint when it breaks. Three things shape it.
