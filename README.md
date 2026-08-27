@@ -234,8 +234,8 @@ role:
 
 ## Cost
 
-Storage and requests are rounding errors. The page is about 660 KB on the shelf,
-and 91 KB over the wire for each reader once compressed. The nightly build takes
+Storage and requests are rounding errors. The page is about 700 KB on the shelf,
+and 104 KB over the wire for each reader once compressed. The nightly build takes
 a few seconds of Lambda.
 The free tier of CloudFront covers the traffic outright. Past the free tier, ten
 thousand visits a month is a few cents.
