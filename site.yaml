@@ -523,5 +523,9 @@ Outputs:
     Value: !Ref BuildAlarmTopic
   CounterSite:
     Value: !Ref CounterSite
+  # Whether /report is answered here. A tool embeds the path in its page, and a
+  # page posting where nothing listens is worse than one that stays quiet.
+  ReportErrors:
+    Value: !Ref ReportErrors
   SiteUrl:
     Value: !Sub "https://${DomainName}/"

@@ -94,7 +94,7 @@ Either way, do not use the root user.
 
 ## Regions
 
-The three templates hold thirty-three resources: thirty in `site.yaml`, two in
+The three templates hold twenty-four resources: twenty-one in `site.yaml`, two in
 `dns.yaml` (the zone and its CAA record) and one in `cert.yaml`. Some of the
 thirty exist only on a condition. Four need an alarm address: two alarms and the
 topic they write to, plus the filter that notices a stale day plan. Eleven more
