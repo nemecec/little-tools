@@ -32,7 +32,7 @@ GOATCOUNTER="${from_env_gc:-${GOATCOUNTER:-}}"
 ALARM_EMAIL="${from_env_alarm:-${ALARM_EMAIL:-}}"   # a failed build writes here
 REPORT_ERRORS="${from_env_reports:-${REPORT_ERRORS:-yes}}"
 
-REPO="${REPO:-nemecec/little-tools}"
+REPO="${REPO:-nemecec/edupage-timetable}"
 CERT_REGION="us-east-1"          # not a preference. CloudFront allows no other
 DNS_STACK="${DOMAIN//./-}-dns"
 CERT_STACK="${DOMAIN//./-}-cert"

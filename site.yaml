@@ -22,7 +22,7 @@ Parameters:
     Description: From the cert stack's output. Must be a certificate in us-east-1.
   GitHubRepo:
     Type: String
-    Default: nemecec/little-tools
+    Default: nemecec/edupage-timetable
     Description: owner/name of the repository allowed to publish. Nothing else can.
   GitHubBranch:
     Type: String

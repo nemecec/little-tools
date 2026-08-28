@@ -56,7 +56,7 @@ describes the address:
 
     ALARM_EMAIL=you@example.com where to write when a nightly build fails.
                                 Unset means no alarm and no topic.
-    REPO=nemecec/little-tools   which repository `./deploy.sh secrets` writes to
+    REPO=nemecec/edupage-timetable   which repository `./deploy.sh secrets` writes to
     OIDC=yes|no                 whether this stack owns the account's GitHub
                                 OIDC provider. Normally worked out on its own.
     YEAR=2026                   pin the school year the nightly build asks for.
@@ -160,7 +160,7 @@ provider, and reuses it. An account can hold only one.
 This sets two secrets: `AWS_PUBLISH_ROLE` and `AWS_BUILD_FUNCTION`. The workflow
 needs both and stops if either one is missing. A fork of this repository can
 thus never authenticate against somebody else's account by accident. The
-command writes to `REPO`, which defaults to `nemecec/little-tools`. If your
+command writes to `REPO`, which defaults to `nemecec/edupage-timetable`. If your
 repository is elsewhere, set `REPO`.
 
 **5. Publish.** Press *Run workflow* on the Actions tab. Or publish from here,
