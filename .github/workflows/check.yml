@@ -18,3 +18,11 @@ jobs:
       - run: python3 -m unittest discover -s tests
       - name: The shell is valid shell
         run: bash -n deploy.sh
+
+      - name: Lint the templates
+        run: |
+          # Pinned like the actions are: an unpinned install is one more thing
+          # that can change under the build without anyone choosing it.
+          pip install --quiet "cfn-lint==1.55.1"
+          cfn-lint cert.yaml --region us-east-1
+          cfn-lint dns.yaml site.yaml --region eu-central-1
