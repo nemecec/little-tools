@@ -20,14 +20,6 @@ Parameters:
   CertificateArn:
     Type: String
     Description: From the cert stack's output. Must be a certificate in us-east-1.
-  GitHubRepo:
-    Type: String
-    Default: nemecec/edupage-timetable
-    Description: owner/name of the repository allowed to publish. Nothing else can.
-  GitHubBranch:
-    Type: String
-    Default: main
-    Description: The only branch whose workflows may assume the publish role.
   AlarmEmail:
     Type: String
     Default: ""
@@ -53,13 +45,6 @@ Parameters:
       half-drawn page and nobody hears about it. The report carries the error,
       the browser and the settings with every typed word replaced by its
       length. It goes to this account's own logs, not to anybody else's.
-  Schedule:
-    Type: String
-    Default: cron(20 3 * * ? *)
-    Description: >
-      When to rebuild. On AWS rather than in the repository, because GitHub
-      switches a scheduled workflow off after sixty days of quiet and this one
-      would have nothing to be busy about.
   CreateOidcProvider:
     Type: String
     Default: "yes"
@@ -330,67 +315,6 @@ Resources:
       ThumbprintList:
         - 6938fd4d98bab03faadb97b34396831e3780aea1
         - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
-
-  # -------------------------------------------------------- scheduled build --
-  BuildRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "build"]]
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal: { Service: lambda.amazonaws.com }
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: publish
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: [s3:PutObject, s3:GetObject]
-                Resource: !Sub "${Bucket.Arn}/*"
-              - Effect: Allow
-                Action: s3:ListBucket
-                Resource: !GetAtt Bucket.Arn
-              - Effect: Allow
-                Action: cloudfront:CreateInvalidation
-                Resource: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
-
-  BuildLogs:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Join ["", ["/aws/lambda/", !Join ["-", !Split [".", !Ref DomainName]], "-build"]]
-      RetentionInDays: 30
-
-  # The real code is pushed by deploy.sh: a template's inline body is capped at
-  # 4 KB and the generator alone is twenty times that.
-  BuildFunction:
-    Type: AWS::Lambda::Function
-    DependsOn: BuildLogs
-    Properties:
-      FunctionName: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "build"]]
-      Runtime: python3.13
-      Handler: lambda_function.handler
-      Role: !GetAtt BuildRole.Arn
-      Timeout: 900
-      MemorySize: 512
-      ReservedConcurrentExecutions: 1
-      Environment:
-        Variables:
-          BUCKET: !Ref Bucket
-          DISTRIBUTION: !Ref Distribution
-      Code:
-        ZipFile: |
-          def handler(event, context):
-              raise RuntimeError("placeholder — run deploy.sh to push the real code")
-
-  # A page nobody is watching goes stale without saying so: EventBridge invokes
-  # asynchronously, retries twice, and then drops the failure on the floor. This
-  # is the only thing that speaks up. It needs somewhere to speak to, so it is
-  # only created when an address is given — see AlarmEmail.
   BuildAlarmTopic:
     Type: AWS::SNS::Topic
     Condition: Alarming
@@ -399,92 +323,6 @@ Resources:
       Subscription:
         - Protocol: email
           Endpoint: !Ref AlarmEmail
-
-  BuildFailed:
-    Type: AWS::CloudWatch::Alarm
-    Condition: Alarming
-    Properties:
-      AlarmName: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "build-failed"]]
-      AlarmDescription: >-
-        The nightly timetable build errored. The site keeps serving the last
-        good page, so nothing is down — but it is no longer being updated.
-      Namespace: AWS/Lambda
-      MetricName: Errors
-      Dimensions:
-        - Name: FunctionName
-          Value: !Ref BuildFunction
-      Statistic: Sum
-      # An hour, not a day. The build runs once a night, so the point of this is
-      # to say so within the hour rather than whenever the day's bucket happens
-      # to close — a day-long period is slow to notice and just as slow to
-      # clear, which leaves it sitting in ALARM long after the cause is gone.
-      Period: 3600
-      EvaluationPeriods: 1
-      Threshold: 0
-      ComparisonOperator: GreaterThanThreshold
-      # The 23 hours a day it is not running are not failures. Nor is a night
-      # the schedule never fired: that is a different fault from the build
-      # breaking, and this alarm does not claim to catch it.
-      TreatMissingData: notBreaching
-      AlarmActions: [!Ref BuildAlarmTopic]
-
-  # A hand-copied day plan goes stale when the school republishes, and the
-  # first sign is a lesson landing where the plan has no slot for it. The
-  # build says so; this is what makes anybody hear it.
-  PlanDrifted:
-    Type: AWS::Logs::MetricFilter
-    Condition: Alarming
-    Properties:
-      LogGroupName: !Ref BuildLogs
-      FilterPattern: '"the day plan has no time for"'
-      MetricTransformations:
-        - MetricNamespace: !Join ["-", !Split [".", !Ref DomainName]]
-          MetricName: PlanDrift
-          MetricValue: "1"
-          DefaultValue: 0
-
-  PlanOutOfDate:
-    Type: AWS::CloudWatch::Alarm
-    Condition: Alarming
-    Properties:
-      AlarmName: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "plan-drift"]]
-      AlarmDescription: >-
-        A lesson landed where the school's day plan has no slot for it. The
-        plan in tt.py is copied from a published sheet, so this is what a
-        republished sheet looks like from here. Read the build log.
-      Namespace: !Join ["-", !Split [".", !Ref DomainName]]
-      MetricName: PlanDrift
-      Statistic: Sum
-      # A day. The build runs once a night, and this is not urgent — it is a
-      # timetable that has moved on, not a site that is down.
-      Period: 86400
-      EvaluationPeriods: 1
-      Threshold: 0
-      ComparisonOperator: GreaterThanThreshold
-      TreatMissingData: notBreaching
-      AlarmActions: [!Ref BuildAlarmTopic]
-
-  # ----------------------------------------------------------------- faults --
-  #
-  # The page tells this endpoint when it breaks. Three things shape it.
-  #
-  # It is same-origin: CloudFront serves /report from this function, so the
-  # policy that lets the page reach nothing at all still lets it reach here,
-  # and no third party is handed the reader's data.
-  #
-  # The way in is an HTTP API, and it took two tries to learn why. A Lambda
-  # function URL is the smaller thing and was the first choice. It cannot be
-  # reached without authentication here — this account is in an organization
-  # that forbids that — and CloudFront cannot supply the authentication either,
-  # because its signature does not cover a request body, which is the whole
-  # payload. An HTTP API has neither limit.
-  #
-  # The API is reachable by anyone who finds it, so a header CloudFront alone
-  # adds is what the function answers to. That is a gate on noise, not a secret
-  # worth guarding: the worst a leak buys is a log line.
-  #
-  # The reader's own words never arrive. The page replaces them with their
-  # length before it sends. See scrubbed() in page.js.
   ReportLogs:
     Type: AWS::Logs::LogGroup
     Condition: Reporting
@@ -669,76 +507,21 @@ Resources:
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
       AlarmActions: [!Ref BuildAlarmTopic]
-
-  BuildSchedule:
-    Type: AWS::Events::Rule
-    Properties:
-      Name: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "rebuild"]]
-      Description: Rebuild the timetable from the school's public data
-      ScheduleExpression: !Ref Schedule
-      State: ENABLED
-      Targets:
-        - Id: build
-          Arn: !GetAtt BuildFunction.Arn
-
-  SchedulePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt BuildFunction.Arn
-      Action: lambda:InvokeFunction
-      Principal: events.amazonaws.com
-      SourceArn: !GetAtt BuildSchedule.Arn
-
-  PublishRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Join ["-", [!Join ["-", !Split [".", !Ref DomainName]], "publish"]]
-      Description: Assumed by the repository's workflow, to ask for a rebuild
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Federated: !If
-                - MakeOidcProvider
-                - !Ref GitHubOidc
-                - !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
-            Action: sts:AssumeRoleWithWebIdentity
-            Condition:
-              StringEquals:
-                token.actions.githubusercontent.com:aud: sts.amazonaws.com
-              StringLike:
-                # GitHub has begun issuing subjects with immutable numeric ids
-                # appended to both names — repo:owner@1180780/name@1343690401:… —
-                # which the snippet everyone copies never matches. Accept that
-                # form as well as the plain one. The wildcards cover only the
-                # ids: a "@" cannot appear in a real owner or repository name,
-                # so this widens nothing.
-                token.actions.githubusercontent.com:sub:
-                  - !Sub "repo:${GitHubRepo}:ref:refs/heads/${GitHubBranch}"
-                  - !Sub
-                    - "repo:${Owner}@*/${Name}@*:ref:refs/heads/${GitHubBranch}"
-                    - Owner: !Select [0, !Split ["/", !Ref GitHubRepo]]
-                      Name: !Select [1, !Split ["/", !Ref GitHubRepo]]
-      Policies:
-        # Asking for a rebuild is all the repository can do. It cannot write to
-        # the bucket, and it cannot reach anything else in the account.
-        - PolicyName: ask-for-a-rebuild
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: lambda:InvokeFunction
-                Resource: !GetAtt BuildFunction.Arn
-
+# What a tool's stack needs from this one. Outputs rather than exports: an
+# exported value cannot change while another stack imports it, and the site
+# would be frozen for as long as anything is hosted on it. A tool's deploy reads
+# these and passes them in as parameters.
 Outputs:
-  BuildFunctionName:
-    Value: !Ref BuildFunction
   BucketName:
     Value: !Ref Bucket
+  BucketArn:
+    Value: !GetAtt Bucket.Arn
   DistributionId:
     Value: !Ref Distribution
-  PublishRoleArn:
-    Value: !GetAtt PublishRole.Arn
+  AlarmTopicArn:
+    Condition: Alarming
+    Value: !Ref BuildAlarmTopic
+  CounterSite:
+    Value: !Ref CounterSite
   SiteUrl:
     Value: !Sub "https://${DomainName}/"

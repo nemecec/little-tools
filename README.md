@@ -1,65 +1,62 @@
 # Hosting little.tools
 
-The timetable at `https://little.tools/timetable/`. AWS rebuilds it every night
-from the school's public data.
+The site itself: the domain, the certificate, the bucket every tool publishes
+into, the CloudFront distribution in front of it, the landing page, and the
+endpoint a page posts a fault or a word of feedback to.
 
-    EventBridge (nightly)  →  Lambda: tt.py  →  S3 (private)  →  CloudFront  →  readers
-                                  ↑
-                       GitHub Actions, when asked
+    tool repository  →  S3 (private)  →  CloudFront  →  readers
+                             ↑
+                    this stack owns the bucket
+
+**The tools live in their own repositories.** Each one publishes under its own
+prefix and brings its own build. Today there is one:
+
+| prefix | repository |
+| --- | --- |
+| `/timetable/` | [nemecec/edupage-timetable](https://github.com/nemecec/edupage-timetable) |
 
 Nothing sits in the request path. Readers get a static object from an edge
-cache. A failed build thus leaves yesterday's page in service, rather than an
-error. The generator is deterministic, so a day with no timetable change
-gives byte-identical output and the run publishes nothing at all.
+cache, so a failed build leaves yesterday's page in service rather than an
+error.
 
-The schedule lives in AWS rather than in the repository. GitHub switches a
-scheduled workflow off after sixty days without repository activity. This page
-needs a rebuild and never an edit, so it reaches that limit and stops without a
-word.
-
-The workflow stays as a button, for when tonight is too far off. It holds no
-key. It exchanges a short-lived OIDC token for a role that only `main` of one
-named repository can assume. That role can do exactly one thing: ask the build
-function to run. It cannot write to the bucket or reach anything else.
+An account holds one GitHub OIDC provider, and this stack owns it. Each tool's
+own stack makes a role against it, trusting `main` of one named repository and
+able to do exactly one thing: ask that tool's build function to run. No such
+role can write to the bucket or reach anything else.
 
 ## What is here
 
 | file | |
 | --- | --- |
-| `site.conf` | the domain, the path and the region — read by everything else |
+| `site.conf` | the domain, the region, the analytics code — read by everything else |
 | `dns.yaml` | the Route 53 hosted zone, on its own |
 | `cert.yaml` | the TLS certificate, in us-east-1 because it must be |
-| `site.yaml` | bucket, CloudFront, the role Actions assumes |
-| `publish.py` | build and publish — run by the Lambda, and by hand |
-| `lambda_function.py` | the entry point for the nightly run |
-| `index.html`, `404.html` | the site root |
+| `site.yaml` | bucket, CloudFront, the report endpoint, the alarms |
+| `index.html`, `404.html` | the site root, listing the tools |
 | `deploy.sh` | the commands below |
-
-The workflow itself is `.github/workflows/publish.yml`.
 
 ## Where the address is configured
 
-In `deploy/site.conf`, and only there:
+In `site.conf`, and only there:
 
-    DOMAIN=little.tools
-    PREFIX=timetable        →  https://little.tools/timetable/
+    DOMAIN=little.tools     →  https://little.tools/
+
+Each tool sets its own prefix in its own repository. `PREFIX=timetable` used to
+live here, back when the timetable and the site were one thing.
     REGION=eu-central-1     →  where the bucket lives
 
-CloudFormation takes the domain from this file. `publish.py` builds the S3 key
-from the prefix. The link on the root page is substituted at publish time. To
-move the page, you edit one line. An environment variable of the same
-name overrides any of them for one command. That is how `OIDC=yes ./deploy.sh
-site` works.
+CloudFormation takes the domain from this file. An environment variable of the
+same name overrides any of them for one command. That is how `OIDC=yes
+./deploy.sh site` works.
 
-Four more settings are read from the environment only, because none of them
+Three more settings are read from the environment only, because none of them
 describes the address:
 
-    ALARM_EMAIL=you@example.com where to write when a nightly build fails.
-                                Unset means no alarm and no topic.
-    REPO=nemecec/edupage-timetable   which repository `./deploy.sh secrets` writes to
+    ALARM_EMAIL=you@example.com where to write when a build fails. Unset means
+                                no alarm and no topic. The tools' alarms write
+                                to the same one.
     OIDC=yes|no                 whether this stack owns the account's GitHub
                                 OIDC provider. Normally worked out on its own.
-    YEAR=2026                   pin the school year the nightly build asks for.
                                 Unset, it follows the calendar and rolls over
                                 in August.
 
@@ -152,21 +149,14 @@ the publish role in `REGION`. It takes ten to twenty minutes, mostly CloudFront.
 The stack works out on its own whether the account already has a GitHub OIDC
 provider, and reuses it. An account can hold only one.
 
-**4. Give the outputs to the repository**, so that the button works.
+**4. Put the landing page up.**
 
-    gh auth switch --user <the account that owns the repo>
-    ./deploy.sh secrets
+    ./deploy.sh pages
 
-This sets two secrets: `AWS_PUBLISH_ROLE` and `AWS_BUILD_FUNCTION`. The workflow
-needs both and stops if either one is missing. A fork of this repository can
-thus never authenticate against somebody else's account by accident. The
-command writes to `REPO`, which defaults to `nemecec/edupage-timetable`. If your
-repository is elsewhere, set `REPO`.
-
-**5. Publish.** Press *Run workflow* on the Actions tab. Or publish from here,
-without waiting:
-
-    ./deploy.sh publish
+**5. Bring up a tool.** Each one is deployed from its own repository, which
+gives the build function its code and hands the stack's outputs to GitHub as
+secrets. For the timetable, see the deploy notes in
+[nemecec/edupage-timetable](https://github.com/nemecec/edupage-timetable).
 
 **6. Get told when a build breaks.** Do this one: EventBridge invokes the
 function asynchronously, retries twice, and then drops the failure. Without an
@@ -183,32 +173,8 @@ That is a different fault from a build that breaks.
 
 ## Afterwards
 
-Publishing happens on the nightly EventBridge schedule, and when you press *Run
-workflow*. It never happens on a push. The school's server limits how often one
-address can ask for everything. It starts to time out a caller that has just
-done so several times over. A day of ordinary commits can spend that limit
-before the nightly run gets its turn.
-
-After a change to the generator, publish deliberately. Use the button, or run
-`./deploy.sh publish` from a machine that has not been hammering the API. For
-the same reason, the determinism check in `check.yml` fetches only when you run
-it by hand.
-
-Two environment variables on the build function decide where the page opens and
-which language it starts in. `./deploy.sh code` sets them from `INITIAL_SCHOOL`,
-`INITIAL_CLASS` and `SITE_LANGUAGE`. The defaults are ProTERA, 8 and et. The
-path, the domain, the region and the GoatCounter code come from `site.conf`,
-which travels in the bundle. The rest is in `site.yaml`.
-
-The schedule is `cron(20 3 * * ? *)`, which is 03:20 UTC. A fetch that stalls is
-retried three times, after 5, 20 and 60 seconds. That is enough to ride out the
-throttling seen in practice. If it still fails, nothing is published and
-yesterday's page stays in service.
-
-A change to the generator republishes nothing on its own. Push it to the
-function and run it:
-
-    ./deploy.sh code && ./deploy.sh publish
+Each tool publishes deliberately, from its own repository. The schedules and the
+retry behaviour live with the tool that owns them.
 
 The distribution speaks **HTTP/2 and not HTTP/3**, deliberately. An
 advertisement for HTTP/3 sets an `alt-svc: h3` header. A browser then tries QUIC
@@ -244,22 +210,6 @@ The real line item is the **Route 53 hosted zone at $0.50/month**. The
 certificate is free. Check the current free-tier terms yourself, rather than
 take this paragraph at its word.
 
-## Before it is public
-
-The page republishes TERA's timetable under your domain: every class, the full
-names of teachers, and the rooms. All of it is already public on
-`tera.edupage.org`, which is where the script reads it from, anonymously and
-without a login. Nothing new is exposed.
-
-But an aggregated copy on somebody else's domain can read as official. It also
-goes stale in silence if the build stops.
-
-The page says that it is unofficial, under its heading, beside a link to the
-school's own page and the date the data was read. A printed sheet carries the
-date and a QR code back to the page, rather than the whole notice. That is worth
-knowing if sheets are what circulate. Tell the school before you publish. It
-takes five minutes.
-
 ## When it goes wrong
 
 **The site loads from a terminal but not in a browser.** Every command-line
@@ -282,13 +232,6 @@ answer is wrong, usually because somebody created or deleted a provider
 elsewhere, say so once. Run `OIDC=yes ./deploy.sh site` to take ownership, or
 `OIDC=no` to leave it alone. Do not let CloudFormation fill in a thumbprint by
 itself. `site.yaml` pins one deliberately.
-
-**The nightly run publishes nothing.** Two reasons are normal. Either the
-timetable did not change, and the page is byte-identical because the generator
-is deterministic. Or a school failed to fetch, and the run refused to replace a
-full page with a smaller one. The second reason is a hard error, and the log
-names the counts. Once you know the cause, `PUBLISH_ANYWAY=1 ./deploy.sh
-publish` overrides it.
 
 **A build fails with something about JSON.** EduPage answers a lapsed session
 with a login page and HTTP 200. The error quotes what came back. There is
